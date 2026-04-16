@@ -1,0 +1,270 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>AI Browser Control - Dashboard</title>
+  <link rel="stylesheet" href="dashboard.css">
+</head>
+<body>
+  <!-- ====== TOP BAR ====== -->
+  <header class="topbar">
+    <div class="topbar-left">
+      <div class="logo">
+        <svg width="28" height="28" viewBox="0 0 28 28" fill="none">
+          <rect width="28" height="28" rx="6" fill="#6366f1"/>
+          <path d="M8 14L12 18L20 10" stroke="white" stroke-width="2.5" stroke-linecap="round" stroke-linejoin="round"/>
+        </svg>
+        <h1>AI Browser Control</h1>
+      </div>
+    </div>
+    <div class="topbar-right">
+      <button id="btnNewTask" class="btn btn-primary">
+        <svg width="16" height="16" viewBox="0 0 16 16" fill="none"><path d="M8 3v10M3 8h10" stroke="currentColor" stroke-width="2" stroke-linecap="round"/></svg>
+        New Task
+      </button>
+      <button id="btnSettings" class="btn btn-ghost">
+        <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M12 15a3 3 0 100-6 3 3 0 000 6z"/><path d="M19.4 15a1.65 1.65 0 00.33 1.82l.06.06a2 2 0 010 2.83 2 2 0 01-2.83 0l-.06-.06a1.65 1.65 0 00-1.82-.33 1.65 1.65 0 00-1 1.51V21a2 2 0 01-2 2 2 2 0 01-2-2v-.09A1.65 1.65 0 009 19.4a1.65 1.65 0 00-1.82.33l-.06.06a2 2 0 01-2.83 0 2 2 0 010-2.83l.06-.06A1.65 1.65 0 004.68 15a1.65 1.65 0 00-1.51-1H3a2 2 0 01-2-2 2 2 0 012-2h.09A1.65 1.65 0 004.6 9a1.65 1.65 0 00-.33-1.82l-.06-.06a2 2 0 010-2.83 2 2 0 012.83 0l.06.06A1.65 1.65 0 009 4.68a1.65 1.65 0 001-1.51V3a2 2 0 012-2 2 2 0 012 2v.09a1.65 1.65 0 001 1.51 1.65 1.65 0 001.82-.33l.06-.06a2 2 0 012.83 0 2 2 0 010 2.83l-.06.06A1.65 1.65 0 0019.32 9a1.65 1.65 0 001.51 1H21a2 2 0 012 2 2 2 0 01-2 2h-.09a1.65 1.65 0 00-1.51 1z"/></svg>
+        Settings
+      </button>
+    </div>
+  </header>
+
+  <!-- ====== MAIN CONTENT ====== -->
+  <main class="main-content">
+    <!-- Task Grid View -->
+    <div id="taskGridView" class="view active">
+      <div class="view-header">
+        <h2>Tasks</h2>
+        <div class="task-filters">
+          <button class="filter-btn active" data-filter="all">All</button>
+          <button class="filter-btn" data-filter="running">Running</button>
+          <button class="filter-btn" data-filter="completed">Completed</button>
+          <button class="filter-btn" data-filter="stopped">Stopped</button>
+        </div>
+      </div>
+      <div id="taskGrid" class="task-grid">
+        <div class="empty-state" id="emptyState">
+          <svg width="64" height="64" viewBox="0 0 24 24" fill="none" stroke="#555" stroke-width="1.5"><rect x="3" y="3" width="18" height="18" rx="2"/><path d="M12 8v4M12 16h.01"/></svg>
+          <h3>No tasks yet</h3>
+          <p>Create a new task to start automating browser actions with AI</p>
+          <button class="btn btn-primary" id="btnNewTaskEmpty">Create First Task</button>
+        </div>
+      </div>
+    </div>
+
+    <!-- Task Detail / Chat View -->
+    <div id="taskDetailView" class="view">
+      <div class="detail-header">
+        <button id="btnBack" class="btn btn-ghost btn-sm">
+          <svg width="16" height="16" viewBox="0 0 16 16" fill="none"><path d="M10 12L6 8l4-4" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"/></svg>
+          Back
+        </button>
+        <div class="detail-title">
+          <h2 id="detailTaskName">Task Name</h2>
+          <span id="detailTaskStatus" class="status-badge">running</span>
+        </div>
+        <div id="tokenBar" class="token-bar" title="Lifetime token usage for this task">
+          <span class="token-bar-item" title="Prompt tokens">
+            <svg width="12" height="12" viewBox="0 0 12 12" fill="none"><circle cx="6" cy="6" r="5" stroke="#818cf8" stroke-width="1.2"/><path d="M4 6h4M6 4v4" stroke="#818cf8" stroke-width="1.2" stroke-linecap="round"/></svg>
+            <span id="tokenIn">0</span> in
+          </span>
+          <span class="token-bar-sep">/</span>
+          <span class="token-bar-item" title="Completion tokens">
+            <svg width="12" height="12" viewBox="0 0 12 12" fill="none"><circle cx="6" cy="6" r="5" stroke="#34d399" stroke-width="1.2"/><path d="M3.5 6l2 2 3-3" stroke="#34d399" stroke-width="1.2" stroke-linecap="round" stroke-linejoin="round"/></svg>
+            <span id="tokenOut">0</span> out
+          </span>
+          <span id="tokenCost" class="token-bar-cost" style="display:none"></span>
+        </div>
+        <div class="detail-actions">
+          <button id="btnStopTask" class="btn btn-danger btn-sm">Stop</button>
+          <button id="btnDeleteTask" class="btn btn-ghost btn-sm">Delete</button>
+        </div>
+      </div>
+
+      <div class="detail-body">
+        <!-- Messages / Chat Area -->
+        <div id="chatMessages" class="chat-messages"></div>
+
+        <!-- Chat Input -->
+        <div class="chat-input-area">
+          <div id="imagePreviewStrip" class="image-preview-strip"></div>
+          <div class="chat-input-container">
+            <button id="btnAddImage" class="btn btn-ghost btn-icon btn-attach" title="Attach image (or paste from clipboard)">
+              <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><rect x="3" y="3" width="18" height="18" rx="2"/><circle cx="8.5" cy="8.5" r="1.5"/><polyline points="21 15 16 10 5 21"/></svg>
+            </button>
+            <textarea id="chatInput" placeholder="Send a message… paste an image with Ctrl+V or click + to attach" rows="1"></textarea>
+            <button id="btnSendMessage" class="btn btn-primary btn-icon">
+              <svg width="18" height="18" viewBox="0 0 24 24" fill="none"><path d="M22 2L11 13M22 2l-7 20-4-9-9-4 20-7z" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"/></svg>
+            </button>
+          </div>
+          <input type="file" id="imageFileInput" accept="image/*" multiple style="display:none">
+        </div>
+      </div>
+    </div>
+  </main>
+
+  <!-- ====== NEW TASK MODAL ====== -->
+  <div id="newTaskModal" class="modal-overlay">
+    <div class="modal">
+      <div class="modal-header">
+        <h2>New Task</h2>
+        <button class="modal-close" id="btnCloseNewTask">&times;</button>
+      </div>
+      <div class="modal-body">
+        <div class="modal-cols">
+          <!-- ===== LEFT COLUMN ===== -->
+          <div class="modal-col-left">
+            <div class="form-group">
+              <label>Task Name</label>
+              <input type="text" id="taskName" placeholder="e.g., Search for reviews on Amazon" class="form-input">
+            </div>
+
+            <div class="form-group">
+              <label>AI Provider</label>
+              <div class="provider-tabs">
+                <button class="provider-tab active" data-provider="ollama">Ollama (Local)</button>
+                <button class="provider-tab" data-provider="openrouter">OpenRouter (Cloud)</button>
+              </div>
+            </div>
+
+            <div class="form-group">
+              <label>Model</label>
+
+              <!-- Ollama: plain native select -->
+              <select id="modelSelect" class="form-select"></select>
+
+              <!-- OpenRouter: custom searchable picker -->
+              <div id="orModelPicker" class="or-model-picker" style="display:none">
+                <div class="or-model-trigger" id="orModelTrigger" tabindex="0">
+                  <span id="orModelLabel">Select a model…</span>
+                  <svg width="10" height="6" viewBox="0 0 10 6" fill="none"><path d="M1 1l4 4 4-4" stroke="currentColor" stroke-width="1.5" stroke-linecap="round"/></svg>
+                </div>
+                <div class="or-model-dropdown" id="orModelDropdown">
+                  <div class="or-model-search-wrap">
+                    <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round"><circle cx="11" cy="11" r="8"/><path d="M21 21l-4.35-4.35"/></svg>
+                    <input type="text" id="orModelSearch" placeholder="Search models…" autocomplete="off" spellcheck="false">
+                  </div>
+                  <div id="orModelList" class="or-model-list"></div>
+                </div>
+              </div>
+
+              <button id="btnRefreshModels" class="btn btn-ghost btn-sm" style="margin-top:4px">Refresh Models</button>
+            </div>
+
+            <div class="form-group">
+              <label>Reasoning Effort
+                <span class="form-hint">Controls how much the model thinks before responding. Higher = slower but smarter.</span>
+              </label>
+              <div class="reasoning-selector" id="reasoningSelector">
+                <button class="reasoning-btn" data-value="none" title="No dedicated reasoning / thinking tokens">None</button>
+                <button class="reasoning-btn" data-value="minimal" title="Very brief reasoning — fastest">Minimal</button>
+                <button class="reasoning-btn active" data-value="low" title="Light reasoning">Low</button>
+                <button class="reasoning-btn" data-value="medium" title="Balanced reasoning">Medium</button>
+                <button class="reasoning-btn" data-value="high" title="Deep reasoning — slower">High</button>
+                <button class="reasoning-btn" data-value="xhigh" title="Max reasoning — slowest, most thorough">XHigh</button>
+              </div>
+            </div>
+
+            <div class="form-group">
+              <label>Initial Message / Task Description</label>
+              <textarea id="taskMessage" placeholder="Describe what you want the agent to do..." rows="4" class="form-input"></textarea>
+            </div>
+          </div><!-- /modal-col-left -->
+
+          <!-- ===== RIGHT COLUMN ===== -->
+          <div class="modal-col-right">
+            <div class="form-group">
+              <label>Permissions</label>
+              <div class="permission-grid">
+                <label class="permission-item">
+                  <input type="checkbox" id="permNavigation" checked>
+                  <span class="permission-icon">🌐</span>
+                  <div>
+                    <strong>Navigation</strong>
+                    <small>Navigate to URLs, open/close tabs</small>
+                  </div>
+                </label>
+                <label class="permission-item">
+                  <input type="checkbox" id="permInteraction" checked>
+                  <span class="permission-icon">👆</span>
+                  <div>
+                    <strong>Page Interaction</strong>
+                    <small>Click, type, fill forms, press keys</small>
+                  </div>
+                </label>
+                <label class="permission-item">
+                  <input type="checkbox" id="permScreenshots" checked>
+                  <span class="permission-icon">📸</span>
+                  <div>
+                    <strong>Screenshots</strong>
+                    <small>Capture page screenshots for visual analysis</small>
+                  </div>
+                </label>
+                <label class="permission-item">
+                  <input type="checkbox" id="permTerminal">
+                  <span class="permission-icon">💻</span>
+                  <div>
+                    <strong>Terminal Access</strong>
+                    <small>Execute shell commands (requires native host)</small>
+                  </div>
+                </label>
+                <label class="permission-item">
+                  <input type="checkbox" id="permJavascript">
+                  <span class="permission-icon">⚡</span>
+                  <div>
+                    <strong>JavaScript Execution</strong>
+                    <small>Run custom JS in the page context</small>
+                  </div>
+                </label>
+              </div>
+            </div>
+
+            <!-- Start button pinned at bottom of right column on wide layout -->
+            <div class="modal-col-right-start">
+              <button class="btn btn-primary btn-full" id="btnCreateTaskRight">▶ Create &amp; Start Task</button>
+            </div>
+          </div><!-- /modal-col-right -->
+        </div><!-- /modal-cols -->
+      </div>
+      <div class="modal-footer modal-footer-narrow">
+        <button class="btn btn-ghost" id="btnCancelNewTask">Cancel</button>
+        <button class="btn btn-primary" id="btnCreateTask">▶ Create &amp; Start Task</button>
+      </div>
+    </div>
+  </div>
+
+  <!-- ====== SETTINGS MODAL ====== -->
+  <div id="settingsModal" class="modal-overlay">
+    <div class="modal">
+      <div class="modal-header">
+        <h2>Settings</h2>
+        <button class="modal-close" id="btnCloseSettings">&times;</button>
+      </div>
+      <div class="modal-body">
+        <div class="form-group">
+          <label>Ollama Base URL</label>
+          <input type="text" id="settOllamaUrl" placeholder="http://localhost:11434" class="form-input">
+        </div>
+        <div class="form-group">
+          <label>OpenRouter API Key</label>
+          <input type="password" id="settOpenRouterKey" placeholder="sk-or-..." class="form-input">
+        </div>
+        <div class="form-group">
+          <label>Default Provider</label>
+          <select id="settDefaultProvider" class="form-select">
+            <option value="ollama">Ollama (Local)</option>
+            <option value="openrouter">OpenRouter (Cloud)</option>
+          </select>
+        </div>
+      </div>
+      <div class="modal-footer">
+        <button class="btn btn-ghost" id="btnCancelSettings">Cancel</button>
+        <button class="btn btn-primary" id="btnSaveSettings">Save Settings</button>
+      </div>
+    </div>
+  </div>
+
+  <script src="dashboard.js"></script>
+</body>
+</html>

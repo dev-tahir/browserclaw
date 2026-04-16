@@ -1,0 +1,9 @@
+{
+  "name": "com.browser_control.agent",
+  "description": "AI Browser Control Agent - Terminal Bridge",
+  "path": "bridge.bat",
+  "type": "stdio",
+  "allowed_origins": [
+    "chrome-extension://*/"
+  ]
+}
