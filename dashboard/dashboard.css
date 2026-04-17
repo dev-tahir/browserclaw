@@ -1144,3 +1144,277 @@ textarea.form-input { resize: vertical; min-height: 80px; }
   .chat-message { max-width: 95%; }
   .detail-header { flex-wrap: wrap; }
 }
+
+/* ====== SKILLS ROW ====== */
+.skills-row {
+  margin-bottom: 20px;
+  background: var(--bg-secondary);
+  border: 1px solid var(--border);
+  border-radius: var(--radius-lg);
+  padding: 12px 16px;
+}
+
+.skills-row-header {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  margin-bottom: 10px;
+}
+
+.skills-row-title {
+  font-size: 12px;
+  font-weight: 700;
+  letter-spacing: 0.06em;
+  text-transform: uppercase;
+  color: var(--text-muted);
+}
+
+.skills-container {
+  display: flex;
+  gap: 10px;
+  overflow-x: auto;
+  padding-bottom: 4px;
+  scrollbar-width: thin;
+}
+
+.skills-empty {
+  font-size: 12px;
+  color: var(--text-muted);
+  padding: 4px 0;
+}
+
+/* Skill card */
+.skill-card {
+  flex-shrink: 0;
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  background: var(--bg-tertiary);
+  border: 1px solid var(--border);
+  border-radius: var(--radius);
+  padding: 8px 12px;
+  min-width: 180px;
+  max-width: 260px;
+  transition: border-color 0.15s;
+}
+
+.skill-card:hover {
+  border-color: var(--accent);
+}
+
+.skill-card-info {
+  flex: 1;
+  min-width: 0;
+}
+
+.skill-card-name {
+  font-size: 13px;
+  font-weight: 600;
+  color: var(--text-primary);
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+
+.skill-domain-chip {
+  display: inline-block;
+  font-size: 10px;
+  color: var(--accent);
+  background: var(--accent-dim);
+  border-radius: 4px;
+  padding: 1px 6px;
+  margin-top: 3px;
+  font-family: var(--font-mono);
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  max-width: 120px;
+}
+
+.skill-card-actions {
+  display: flex;
+  gap: 4px;
+  flex-shrink: 0;
+}
+
+.skill-card-btn {
+  background: transparent;
+  border: 1px solid var(--border);
+  border-radius: var(--radius-sm);
+  color: var(--text-secondary);
+  font-size: 11px;
+  padding: 3px 8px;
+  cursor: pointer;
+  transition: all 0.15s;
+  font-family: var(--font-sans);
+  white-space: nowrap;
+}
+
+.skill-card-btn:hover {
+  background: var(--bg-hover);
+  color: var(--text-primary);
+  border-color: var(--border-light);
+}
+
+.skill-card-btn.reset {
+  color: var(--warning);
+  border-color: rgba(245, 158, 11, 0.3);
+}
+
+.skill-card-btn.reset:hover {
+  background: var(--warning-dim);
+}
+
+/* ====== SKILL MODALS ====== */
+.skill-modal-wide {
+  width: 680px;
+  max-width: calc(100vw - 48px);
+}
+
+.skill-modal-header-left {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+}
+
+.skill-domain-badge {
+  font-size: 11px;
+  color: var(--accent);
+  background: var(--accent-dim);
+  border-radius: 4px;
+  padding: 2px 8px;
+  font-family: var(--font-mono);
+}
+
+.skill-modified-badge {
+  font-size: 10px;
+  color: var(--warning);
+  background: var(--warning-dim);
+  border-radius: 4px;
+  padding: 2px 6px;
+  font-weight: 600;
+  text-transform: uppercase;
+  letter-spacing: 0.04em;
+}
+
+.skill-textarea {
+  font-family: var(--font-mono);
+  font-size: 12px;
+  line-height: 1.6;
+  min-height: 320px;
+  resize: vertical;
+}
+
+/* Create skill modal meta row */
+.create-skill-meta {
+  display: grid;
+  grid-template-columns: 2fr 1fr 2fr;
+  gap: 12px;
+  margin-bottom: 4px;
+}
+
+@media (max-width: 600px) {
+  .create-skill-meta { grid-template-columns: 1fr; }
+}
+
+.skill-content-label-row {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  margin-bottom: 6px;
+}
+
+.skill-content-label-row label {
+  margin-bottom: 0;
+}
+
+.skill-generate-btn {
+  margin-left: auto;
+}
+
+.generate-skill-status {
+  font-size: 11px;
+  color: var(--text-muted);
+  font-style: italic;
+}
+
+/* ====== SKILL CHECKBOXES (new task modal) ====== */
+.skill-auto-label {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  font-size: 13px;
+  color: var(--text-primary);
+  cursor: pointer;
+  margin-bottom: 4px;
+}
+
+.skill-auto-label input[type="checkbox"] {
+  width: 15px;
+  height: 15px;
+  accent-color: var(--accent);
+  cursor: pointer;
+}
+
+.skill-auto-hint {
+  font-size: 11px;
+  color: var(--text-muted);
+  margin-bottom: 8px;
+}
+
+.skill-checkboxes {
+  display: none;
+  flex-direction: column;
+  gap: 6px;
+  margin-top: 6px;
+}
+
+.skill-checkboxes.visible {
+  display: flex;
+}
+
+.skill-checkbox-item {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  padding: 7px 10px;
+  background: var(--bg-primary);
+  border: 1px solid var(--border);
+  border-radius: var(--radius-sm);
+  cursor: pointer;
+  transition: border-color 0.15s;
+  font-size: 12px;
+  color: var(--text-primary);
+}
+
+.skill-checkbox-item:hover {
+  border-color: var(--accent);
+}
+
+.skill-checkbox-item input[type="checkbox"] {
+  width: 14px;
+  height: 14px;
+  accent-color: var(--accent);
+  cursor: pointer;
+  flex-shrink: 0;
+}
+
+.skill-checkbox-domain {
+  font-family: var(--font-mono);
+  font-size: 10px;
+  color: var(--accent);
+  background: var(--accent-dim);
+  border-radius: 3px;
+  padding: 1px 5px;
+  margin-left: auto;
+  white-space: nowrap;
+}
+
+/* form-hint helper */
+.form-hint {
+  font-size: 11px;
+  font-weight: 400;
+  color: var(--text-muted);
+  display: block;
+  margin-top: 2px;
+}

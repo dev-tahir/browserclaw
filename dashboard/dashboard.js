@@ -23,6 +23,10 @@
   // Reasoning effort (matches the active .reasoning-btn)
   let selectedReasoningEffort = 'low';
 
+  // Skills
+  let skills = [];           // all loaded skills (from service worker)
+  let editingSkillId = null; // skill currently open in the viewer/editor modal
+
   // ============ ELEMENTS ============
   const $ = (sel) => document.querySelector(sel);
   const $$ = (sel) => document.querySelectorAll(sel);
@@ -43,6 +47,7 @@
     initScreenshotModal();
     setupEventListeners();
     await loadSettings();
+    await loadSkills();
     await loadAgents();
     connectDashboardPort();
   }
@@ -152,9 +157,41 @@
     // Setup OpenRouter custom model picker
     setupOrPickerListeners();
 
+    // Skills row
+    $('#btnAddSkill').addEventListener('click', () => openCreateSkillModal(null));
+
+    // Skill viewer/editor modal
+    $('#btnCloseSkillModal').addEventListener('click', closeSkillModal);
+    $('#btnCancelSkillModal').addEventListener('click', closeSkillModal);
+    $('#btnSaveSkillModal').addEventListener('click', saveCurrentSkill);
+    $('#btnResetSkill').addEventListener('click', resetCurrentSkill);
+    $('#btnDeleteSkill').addEventListener('click', deleteCurrentSkill);
+
+    // Create skill modal
+    $('#btnCloseCreateSkill').addEventListener('click', closeCreateSkillModal);
+    $('#btnCancelCreateSkill').addEventListener('click', closeCreateSkillModal);
+    $('#btnSaveCreateSkill').addEventListener('click', saveNewSkill);
+    $('#btnGenerateSkill').addEventListener('click', generateSkillFromConversation);
+
+    // Skill auto-mode toggle in new task modal
+    $('#skillAutoMode').addEventListener('change', () => {
+      const manual = !$('#skillAutoMode').checked;
+      $('#skillCheckboxes').classList.toggle('visible', manual);
+      $('.skill-auto-hint').style.display = manual ? 'none' : '';
+    });
+
+    // Save as skill (task detail header)
+    $('#btnSaveAsSkill').addEventListener('click', () => openCreateSkillModal(currentTaskId));
+
     // Close modals on overlay click — newTaskModal excluded (X button / Cancel only)
     settingsModal.addEventListener('click', (e) => {
       if (e.target === settingsModal) settingsModal.classList.remove('active');
+    });
+    $('#skillModal').addEventListener('click', (e) => {
+      if (e.target === $('#skillModal')) closeSkillModal();
+    });
+    $('#createSkillModal').addEventListener('click', (e) => {
+      if (e.target === $('#createSkillModal')) closeCreateSkillModal();
     });
   }
 
@@ -491,7 +528,13 @@
         screenshots: $('#permScreenshots').checked,
         terminal: $('#permTerminal').checked,
         javascript: $('#permJavascript').checked
-      }
+      },
+      skillsMode: $('#skillAutoMode').checked ? 'auto' : 'manual',
+      skills: (() => {
+        const ids = [];
+        $$('#skillCheckboxes input:checked').forEach(cb => ids.push(cb.value));
+        return ids;
+      })()
     };
 
     // Create agent
@@ -980,6 +1023,11 @@
     newTaskModal.classList.add('active');
     $('#taskName').value = '';
     $('#taskMessage').value = '';
+    // Reset skills section
+    $('#skillAutoMode').checked = true;
+    $('#skillCheckboxes').classList.remove('visible');
+    $('.skill-auto-hint').style.display = '';
+    renderSkillCheckboxes();
     loadModels();
     $('#taskName').focus();
   }
@@ -1106,4 +1154,256 @@
 
   // ============ START ============
   init();
+
+  // ============ SKILLS ============
+
+  async function loadSkills() {
+    const res = await chrome.runtime.sendMessage({ type: 'getSkills' });
+    if (res?.success) {
+      skills = res.skills || [];
+      renderSkillsRow();
+    }
+  }
+
+  function renderSkillsRow() {
+    const container = $('#skillsContainer');
+    container.innerHTML = '';
+
+    if (skills.length === 0) {
+      container.innerHTML = '<div class="skills-empty">No skills yet — add one to give agents domain knowledge.</div>';
+      return;
+    }
+
+    for (const skill of skills) {
+      const card = document.createElement('div');
+      card.className = 'skill-card';
+
+      const info = document.createElement('div');
+      info.className = 'skill-card-info';
+      info.innerHTML = `
+        <div class="skill-card-name">${escapeHtml(skill.name)}</div>
+        ${skill.domain ? `<span class="skill-domain-chip">${escapeHtml(skill.domain)}</span>` : ''}
+      `;
+
+      const actions = document.createElement('div');
+      actions.className = 'skill-card-actions';
+
+      const editBtn = document.createElement('button');
+      editBtn.className = 'skill-card-btn';
+      editBtn.textContent = 'Edit';
+      editBtn.addEventListener('click', () => openSkillModal(skill.id));
+
+      actions.appendChild(editBtn);
+
+      if (skill.bundled && skill.modified) {
+        const resetBtn = document.createElement('button');
+        resetBtn.className = 'skill-card-btn reset';
+        resetBtn.textContent = 'Reset';
+        resetBtn.addEventListener('click', (e) => { e.stopPropagation(); confirmResetSkill(skill.id); });
+        actions.appendChild(resetBtn);
+      }
+
+      card.appendChild(info);
+      card.appendChild(actions);
+      container.appendChild(card);
+    }
+  }
+
+  function renderSkillCheckboxes() {
+    const container = $('#skillCheckboxes');
+    container.innerHTML = '';
+    if (skills.length === 0) {
+      container.innerHTML = '<div style="font-size:11px;color:var(--text-muted);padding:4px 0">No skills available.</div>';
+      return;
+    }
+    for (const skill of skills) {
+      const label = document.createElement('label');
+      label.className = 'skill-checkbox-item';
+
+      const cb = document.createElement('input');
+      cb.type = 'checkbox';
+      cb.value = skill.id;
+      cb.checked = true;
+
+      const nameSpan = document.createElement('span');
+      nameSpan.textContent = skill.name;
+
+      label.appendChild(cb);
+      label.appendChild(nameSpan);
+
+      if (skill.domain) {
+        const domainSpan = document.createElement('span');
+        domainSpan.className = 'skill-checkbox-domain';
+        domainSpan.textContent = skill.domain;
+        label.appendChild(domainSpan);
+      }
+
+      container.appendChild(label);
+    }
+  }
+
+  // ── Skill viewer / editor modal ───────────────────────────────────────────
+
+  function openSkillModal(skillId) {
+    const skill = skills.find(s => s.id === skillId);
+    if (!skill) return;
+    editingSkillId = skillId;
+
+    $('#skillModalTitle').textContent = skill.name;
+    const domainBadge = $('#skillModalDomain');
+    domainBadge.textContent = skill.domain || '';
+    domainBadge.style.display = skill.domain ? '' : 'none';
+
+    const modifiedBadge = $('#skillModalModifiedBadge');
+    modifiedBadge.style.display = (skill.bundled && skill.modified) ? '' : 'none';
+
+    $('#skillModalContent').value = skill.rawContent || '';
+
+    // Reset button: only for bundled+modified
+    $('#btnResetSkill').style.display = (skill.bundled && skill.modified) ? '' : 'none';
+    // Delete button: only for non-bundled (custom) skills
+    $('#btnDeleteSkill').style.display = !skill.bundled ? '' : 'none';
+
+    $('#skillModal').classList.add('active');
+    $('#skillModalContent').focus();
+  }
+
+  function closeSkillModal() {
+    $('#skillModal').classList.remove('active');
+    editingSkillId = null;
+  }
+
+  async function saveCurrentSkill() {
+    if (!editingSkillId) return;
+    const content = $('#skillModalContent').value;
+    const res = await chrome.runtime.sendMessage({ type: 'saveSkill', id: editingSkillId, content });
+    if (res?.success) {
+      closeSkillModal();
+      await loadSkills();
+    } else {
+      alert('Failed to save skill: ' + (res?.error || 'Unknown error'));
+    }
+  }
+
+  async function resetCurrentSkill() {
+    if (!editingSkillId) return;
+    if (!confirm('Reset this skill to its default content? Your changes will be lost.')) return;
+    const res = await chrome.runtime.sendMessage({ type: 'resetSkill', id: editingSkillId });
+    if (res?.success) {
+      closeSkillModal();
+      await loadSkills();
+    }
+  }
+
+  async function confirmResetSkill(skillId) {
+    if (!confirm('Reset this skill to its default content?')) return;
+    const res = await chrome.runtime.sendMessage({ type: 'resetSkill', id: skillId });
+    if (res?.success) await loadSkills();
+  }
+
+  async function deleteCurrentSkill() {
+    if (!editingSkillId) return;
+    if (!confirm('Delete this skill permanently?')) return;
+    const res = await chrome.runtime.sendMessage({ type: 'deleteSkill', id: editingSkillId });
+    if (res?.success) {
+      closeSkillModal();
+      await loadSkills();
+    } else {
+      alert('Failed to delete: ' + (res?.error || 'Unknown error'));
+    }
+  }
+
+  // ── Create skill modal ────────────────────────────────────────────────────
+
+  function openCreateSkillModal(taskId) {
+    $('#newSkillName').value = '';
+    $('#newSkillDomain').value = '';
+    $('#newSkillDescription').value = '';
+    $('#newSkillContent').value = '';
+    $('#generateSkillStatus').textContent = '';
+
+    // Pre-fill name from task if available
+    if (taskId) {
+      const agent = agents.find(a => a.id === taskId);
+      if (agent) $('#newSkillName').value = agent.name;
+    }
+
+    // Show generate button only when opened from a task detail
+    const generateBtn = $('#btnGenerateSkill');
+    generateBtn.style.display = taskId ? '' : 'none';
+    generateBtn.dataset.taskId = taskId || '';
+
+    $('#createSkillModal').classList.add('active');
+    $('#newSkillName').focus();
+  }
+
+  function closeCreateSkillModal() {
+    $('#createSkillModal').classList.remove('active');
+  }
+
+  async function saveNewSkill() {
+    const name = $('#newSkillName').value.trim();
+    if (!name) { alert('Please enter a skill name.'); return; }
+
+    const domain = $('#newSkillDomain').value.trim();
+    const description = $('#newSkillDescription').value.trim();
+    const body = $('#newSkillContent').value.trim();
+
+    // Build full file content
+    let content = `name: ${name}\n`;
+    if (domain)      content += `domain: ${domain}\n`;
+    if (description) content += `description: ${description}\n`;
+    content += `version: 1.0\n---\n${body}`;
+
+    // Generate a unique ID from the name
+    const baseId = name.toLowerCase().replace(/[^a-z0-9]+/g, '_').replace(/^_|_$/g, '') || 'skill';
+    const id = skills.some(s => s.id === baseId) ? `${baseId}_${Date.now()}` : baseId;
+
+    const res = await chrome.runtime.sendMessage({ type: 'createSkill', id, content });
+    if (res?.success) {
+      closeCreateSkillModal();
+      await loadSkills();
+    } else {
+      alert('Failed to create skill: ' + (res?.error || 'Unknown error'));
+    }
+  }
+
+  async function generateSkillFromConversation() {
+    const taskId = $('#btnGenerateSkill').dataset.taskId;
+    if (!taskId) return;
+
+    const btn = $('#btnGenerateSkill');
+    const status = $('#generateSkillStatus');
+    btn.disabled = true;
+    status.textContent = 'Generating…';
+
+    const res = await chrome.runtime.sendMessage({ type: 'generateSkillFromChat', taskId });
+
+    btn.disabled = false;
+    if (res?.success && res.content) {
+      status.textContent = 'Done!';
+      setTimeout(() => { status.textContent = ''; }, 3000);
+
+      // Parse the generated content and fill form fields
+      const lines = res.content.split('\n');
+      const meta = {};
+      let bodyStart = 0;
+      for (let i = 0; i < lines.length; i++) {
+        if (lines[i].trim() === '---') { bodyStart = i + 1; break; }
+        const ci = lines[i].indexOf(':');
+        if (ci > 0) {
+          const k = lines[i].slice(0, ci).trim().toLowerCase();
+          const v = lines[i].slice(ci + 1).trim();
+          if (['name', 'domain', 'description'].includes(k)) meta[k] = v;
+        }
+      }
+
+      if (meta.name)        $('#newSkillName').value = meta.name;
+      if (meta.domain)      $('#newSkillDomain').value = meta.domain;
+      if (meta.description) $('#newSkillDescription').value = meta.description;
+      $('#newSkillContent').value = lines.slice(bodyStart).join('\n').trim();
+    } else {
+      status.textContent = 'Failed: ' + (res?.error || 'Unknown error');
+    }
+  }
 })();

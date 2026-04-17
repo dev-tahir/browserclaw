@@ -32,6 +32,20 @@
 
   <!-- ====== MAIN CONTENT ====== -->
   <main class="main-content">
+
+    <!-- ====== SKILLS ROW (always visible) ====== -->
+    <div id="skillsRow" class="skills-row">
+      <div class="skills-row-header">
+        <span class="skills-row-title">Skills</span>
+        <button id="btnAddSkill" class="btn btn-ghost btn-sm">
+          <svg width="12" height="12" viewBox="0 0 16 16" fill="none"><path d="M8 3v10M3 8h10" stroke="currentColor" stroke-width="2" stroke-linecap="round"/></svg>
+          Add Skill
+        </button>
+      </div>
+      <div id="skillsContainer" class="skills-container">
+        <div class="skills-empty">No skills yet — add one to give agents domain knowledge.</div>
+      </div>
+    </div>
     <!-- Task Grid View -->
     <div id="taskGridView" class="view active">
       <div class="view-header">
@@ -77,6 +91,10 @@
           <span id="tokenCost" class="token-bar-cost" style="display:none"></span>
         </div>
         <div class="detail-actions">
+          <button id="btnSaveAsSkill" class="btn btn-ghost btn-sm">
+            <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M12 2a10 10 0 100 20 10 10 0 000-20z"/><path d="M12 8v4l3 3"/></svg>
+            Save as Skill
+          </button>
           <button id="btnStopTask" class="btn btn-danger btn-sm">Stop</button>
           <button id="btnDeleteTask" class="btn btn-ghost btn-sm">Delete</button>
         </div>
@@ -219,10 +237,20 @@
                 </label>
               </div>
             </div>
-
+            <div class="form-group">
+              <label>Skills
+                <span class="form-hint">Inject domain knowledge to help the agent work faster.</span>
+              </label>
+              <label class="skill-auto-label">
+                <input type="checkbox" id="skillAutoMode" checked>
+                <span>Let agent decide</span>
+              </label>
+              <p class="skill-auto-hint">All skills are injected automatically. Agent uses what's relevant.</p>
+              <div id="skillCheckboxes" class="skill-checkboxes"></div>
+            </div>
             <!-- Start button pinned at bottom of right column on wide layout -->
             <div class="modal-col-right-start">
-              <button class="btn btn-primary btn-full" id="btnCreateTaskRight">▶ Create &amp; Start Task</button>
+              <button class="btn btn-primary btn-full" id="btnCreateTaskRight">&#9654; Create &amp; Start Task</button>
             </div>
           </div><!-- /modal-col-right -->
         </div><!-- /modal-cols -->
@@ -261,6 +289,72 @@
       <div class="modal-footer">
         <button class="btn btn-ghost" id="btnCancelSettings">Cancel</button>
         <button class="btn btn-primary" id="btnSaveSettings">Save Settings</button>
+      </div>
+    </div>
+  </div>
+
+  <!-- ====== SKILL VIEWER / EDITOR MODAL ====== -->
+  <div id="skillModal" class="modal-overlay">
+    <div class="modal skill-modal-wide">
+      <div class="modal-header">
+        <div class="skill-modal-header-left">
+          <h2 id="skillModalTitle">Skill</h2>
+          <span id="skillModalDomain" class="skill-domain-badge"></span>
+          <span id="skillModalModifiedBadge" class="skill-modified-badge" style="display:none">modified</span>
+        </div>
+        <button class="modal-close" id="btnCloseSkillModal">&times;</button>
+      </div>
+      <div class="modal-body">
+        <textarea id="skillModalContent" class="form-input skill-textarea" rows="22" spellcheck="false"></textarea>
+      </div>
+      <div class="modal-footer">
+        <button class="btn btn-ghost btn-sm" id="btnResetSkill" style="display:none">Reset to Default</button>
+        <button class="btn btn-danger btn-sm" id="btnDeleteSkill" style="display:none">Delete Skill</button>
+        <div style="flex:1"></div>
+        <button class="btn btn-ghost" id="btnCancelSkillModal">Cancel</button>
+        <button class="btn btn-primary" id="btnSaveSkillModal">Save</button>
+      </div>
+    </div>
+  </div>
+
+  <!-- ====== CREATE SKILL MODAL ====== -->
+  <div id="createSkillModal" class="modal-overlay">
+    <div class="modal skill-modal-wide">
+      <div class="modal-header">
+        <h2>Create Skill</h2>
+        <button class="modal-close" id="btnCloseCreateSkill">&times;</button>
+      </div>
+      <div class="modal-body">
+        <div class="create-skill-meta">
+          <div class="form-group">
+            <label>Skill Name <span style="color:var(--danger)">*</span></label>
+            <input type="text" id="newSkillName" placeholder="e.g., GitHub Automation" class="form-input">
+          </div>
+          <div class="form-group">
+            <label>Domain</label>
+            <input type="text" id="newSkillDomain" placeholder="e.g., github.com" class="form-input">
+          </div>
+          <div class="form-group">
+            <label>Description</label>
+            <input type="text" id="newSkillDescription" placeholder="Brief description of what this skill covers" class="form-input">
+          </div>
+        </div>
+        <div class="form-group">
+          <div class="skill-content-label-row">
+            <label>Skill Content</label>
+            <button id="btnGenerateSkill" class="btn btn-ghost btn-sm skill-generate-btn" style="display:none">
+              <svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M12 2a10 10 0 110 20A10 10 0 0112 2z"/><path d="M12 6v6l4 2"/></svg>
+              Generate from conversation
+            </button>
+            <span id="generateSkillStatus" class="generate-skill-status"></span>
+          </div>
+          <textarea id="newSkillContent" class="form-input skill-textarea" rows="16"
+            placeholder="Describe automation knowledge, CSS selectors, common flows, gotchas, URL patterns..."></textarea>
+        </div>
+      </div>
+      <div class="modal-footer">
+        <button class="btn btn-ghost" id="btnCancelCreateSkill">Cancel</button>
+        <button class="btn btn-primary" id="btnSaveCreateSkill">Save Skill</button>
       </div>
     </div>
   </div>

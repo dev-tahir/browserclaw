@@ -82,7 +82,7 @@ export class AgentManager {
         javascript: taskConfig.permissions?.javascript || false
       },
       messages: [
-        { role: 'system', content: SYSTEM_PROMPT }
+        { role: 'system', content: SYSTEM_PROMPT + (taskConfig.skillsAppendix || '') }
       ],
       displayMessages: [], // Messages shown in UI (without system prompt)
       pendingMessagesForAI: [], // One-shot messages (with images) — sent once then discarded from history
