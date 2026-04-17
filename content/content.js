@@ -45,9 +45,50 @@
         return doExtractContent();
       case 'extract_all_text':
         return doExtractAllText();
+      case 'get_element_coords':
+        return doGetElementCoords(message.selector);
+      case 'get_mapped_button_coords':
+        return doGetMappedButtonCoords(message.n);
       default:
         return { success: false, error: `Unknown action: ${message.action}` };
     }
+  }
+
+  // ============ ELEMENT COORDINATES (for debugger clicks) ============
+
+  function doGetElementCoords(selector) {
+    const el = findElement(selector);
+    if (!el) return { success: false, error: `Element not found: ${selector}` };
+
+    el.scrollIntoView({ behavior: 'instant', block: 'center' });
+
+    // Re-measure after scroll
+    const rect = el.getBoundingClientRect();
+    const x = Math.round(rect.left + rect.width / 2);
+    const y = Math.round(rect.top + rect.height / 2);
+
+    return {
+      success: true,
+      x, y,
+      rect: { left: Math.round(rect.left), top: Math.round(rect.top), width: Math.round(rect.width), height: Math.round(rect.height) },
+      element: describeElement(el),
+      selector: generateUniqueSelector(el)
+    };
+  }
+
+  function doGetMappedButtonCoords(n) {
+    const el = document.querySelector(`[data-bca-n="${n}"]`);
+    if (!el) return { success: false, error: `Mapped button ${n} not found in DOM` };
+
+    el.scrollIntoView({ behavior: 'instant', block: 'nearest' });
+    const rect = el.getBoundingClientRect();
+    const x = Math.round(rect.left + rect.width / 2);
+    const y = Math.round(rect.top + rect.height / 2);
+
+    const tag = el.tagName.toLowerCase();
+    const text = (el.textContent || el.getAttribute('aria-label') || el.getAttribute('value') || '').trim().slice(0, 80);
+
+    return { success: true, x, y, tag, text, n };
   }
 
   // ============ CLICK ============
@@ -85,12 +126,38 @@
     el.scrollIntoView({ behavior: 'smooth', block: 'center' });
     el.focus();
 
+    const isContentEditable = el.isContentEditable || el.getAttribute('contenteditable') === 'true';
+
+    if (isContentEditable) {
+      // ── Contenteditable (e.g. X/Twitter's Lexical tweet box, Google Docs, etc.) ──
+      // execCommand('insertText') fires native DOM input events that React/Lexical
+      // intercepts correctly. Plain el.value = '...' has no effect on these elements.
+
+      if (clearFirst) {
+        // Select all content then delete it before inserting
+        document.execCommand('selectAll', false, null);
+        document.execCommand('delete', false, null);
+      }
+
+      // Insert the text – this triggers the editor's internal event handlers
+      document.execCommand('insertText', false, text);
+
+      // Also fire a synthetic input event as fallback for any listeners not covered
+      el.dispatchEvent(new InputEvent('input', { bubbles: true, cancelable: true, data: text }));
+
+      return {
+        success: true,
+        message: `Typed "${text.substring(0, 50)}${text.length > 50 ? '...' : ''}" into contenteditable ${selector}`
+      };
+    }
+
+    // ── Standard <input> / <textarea> ──
     if (clearFirst) {
       el.value = '';
       el.dispatchEvent(new Event('input', { bubbles: true }));
     }
 
-    // Set value
+    // Use native setter so React's synthetic onChange fires correctly
     const nativeInputValueSetter = Object.getOwnPropertyDescriptor(
       window.HTMLInputElement.prototype, 'value'
     )?.set || Object.getOwnPropertyDescriptor(

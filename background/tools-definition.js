@@ -20,7 +20,7 @@ export const TOOLS = [
     type: 'function',
     function: {
       name: 'click',
-      description: 'Click on an element on the page using a CSS selector. Use find_elements first to discover available elements.',
+      description: 'Click on an element using a CSS selector. Sends a real trusted mouse click via the browser debugger protocol — works on all elements including contenteditable divs, React/Lexical editors, and shadow DOM. Use find_elements first to discover available elements.',
       parameters: {
         type: 'object',
         properties: {
@@ -34,7 +34,7 @@ export const TOOLS = [
     type: 'function',
     function: {
       name: 'type_text',
-      description: 'Type text into an input or textarea element',
+      description: 'Type text into any focusable element (input, textarea, contenteditable div, Lexical/Draft editors). Uses trusted keyboard input via the browser debugger — the element is clicked first to gain focus, then text is inserted via real key events.',
       parameters: {
         type: 'object',
         properties: {
@@ -50,7 +50,7 @@ export const TOOLS = [
     type: 'function',
     function: {
       name: 'press_key',
-      description: 'Press a keyboard key (e.g., Enter, Tab, Escape, ArrowDown)',
+      description: 'Press a keyboard key (e.g., Enter, Tab, Escape, ArrowDown). Sends a trusted key event via the browser debugger.',
       parameters: {
         type: 'object',
         properties: {
@@ -359,7 +359,7 @@ export const TOOLS = [
     type: 'function',
     function: {
       name: 'press_mapped_button',
-      description: 'Click a button by its number from the most recent map_buttons call. After clicking the button map is cleared — call map_buttons again to get fresh numbers.',
+      description: 'Click a button by its number from the most recent map_buttons call using a trusted debugger click. After clicking the button map is cleared — call map_buttons again to get fresh numbers.',
       parameters: {
         type: 'object',
         properties: {

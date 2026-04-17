@@ -1,5 +1,8 @@
 // Tool Executor - Executes browser automation tools
 // Bridges between AI tool calls and Chrome APIs / Content Scripts
+// Uses chrome.debugger (CDP) for trusted mouse/keyboard input
+
+import { DebuggerController } from './debugger-controller.js';
 
 const NATIVE_HOST_NAME = 'com.browser_control.agent';
 
@@ -9,6 +12,7 @@ export class ToolExecutor {
     this.nativePendingCallbacks = new Map();
     this.nativeMessageId = 0;
     this._buttonMap = new Map(); // tabId -> [{n, tag, text, ariaLabel, role}]
+    this.debugger = new DebuggerController();
   }
 
   // Execute a tool call and return the result
@@ -123,6 +127,7 @@ export class ToolExecutor {
   }
 
   async closeTab(tabId) {
+    await this.debugger.detach(tabId);
     await chrome.tabs.remove(tabId);
     return { success: true, message: 'Tab closed' };
   }
@@ -150,30 +155,94 @@ export class ToolExecutor {
     };
   }
 
-  // ============ DOM INTERACTION ============
+  // ============ DOM INTERACTION (TRUSTED via chrome.debugger) ============
 
   async click(tabId, selector) {
-    return await this._sendToContent(tabId, { action: 'click', selector });
+    // Get element coordinates from content script
+    const coords = await this._sendToContent(tabId, { action: 'get_element_coords', selector });
+    if (!coords.success) return coords;
+
+    // Perform trusted click via CDP
+    await this.debugger.click(tabId, coords.x, coords.y);
+
+    return {
+      success: true,
+      element: coords.element,
+      message: `Clicked (trusted): ${coords.element?.text || selector} at (${coords.x}, ${coords.y})`
+    };
   }
 
   async typeText(tabId, selector, text, clearFirst) {
-    return await this._sendToContent(tabId, { action: 'type_text', selector, text, clearFirst });
+    // If a selector is given, trusted-click the element first to focus it
+    if (selector) {
+      const clickResult = await this.click(tabId, selector);
+      if (!clickResult.success) return clickResult;
+      // Small delay for focus/activation to settle
+      await new Promise(r => setTimeout(r, 100));
+    }
+
+    // Clear existing text if requested
+    if (clearFirst) {
+      await this.debugger.clearField(tabId);
+      await new Promise(r => setTimeout(r, 50));
+    }
+
+    // Type using trusted CDP input
+    await this.debugger.typeText(tabId, text);
+
+    return {
+      success: true,
+      message: `Typed (trusted) "${text.substring(0, 50)}${text.length > 50 ? '...' : ''}" into ${selector || 'focused element'}`
+    };
   }
 
   async pressKey(tabId, key, selector) {
-    return await this._sendToContent(tabId, { action: 'press_key', key, selector });
+    // If a selector is given, trusted-click to focus first
+    if (selector) {
+      const clickResult = await this.click(tabId, selector);
+      if (!clickResult.success) return clickResult;
+      await new Promise(r => setTimeout(r, 50));
+    }
+
+    await this.debugger.pressKey(tabId, key);
+    return { success: true, message: `Pressed key (trusted): ${key}` };
   }
 
   async hover(tabId, selector) {
-    return await this._sendToContent(tabId, { action: 'hover', selector });
+    const coords = await this._sendToContent(tabId, { action: 'get_element_coords', selector });
+    if (!coords.success) return coords;
+
+    // Move mouse to element (triggers hover/mouseenter)
+    await this.debugger.attach(tabId);
+    await this.debugger._sendCommand(tabId, 'Input.dispatchMouseEvent', {
+      type: 'mouseMoved',
+      x: coords.x,
+      y: coords.y,
+      button: 'none'
+    });
+
+    return { success: true, message: `Hovered (trusted) over: ${selector} at (${coords.x}, ${coords.y})` };
   }
 
   async selectOption(tabId, selector, value) {
+    // Click the select to focus it first, then let content script handle value setting
+    await this.click(tabId, selector);
+    await new Promise(r => setTimeout(r, 50));
     return await this._sendToContent(tabId, { action: 'select_option', selector, value });
   }
 
   async fillForm(tabId, fields) {
-    return await this._sendToContent(tabId, { action: 'fill_form', fields });
+    const results = [];
+    for (const field of fields) {
+      const result = await this.typeText(tabId, field.selector, field.value, true);
+      results.push({ selector: field.selector, ...result });
+    }
+    const allSuccess = results.every(r => r.success);
+    return {
+      success: allSuccess,
+      results,
+      message: `Filled ${results.filter(r => r.success).length}/${fields.length} fields`
+    };
   }
 
   async findElements(tabId, selector, limit) {
@@ -449,6 +518,7 @@ export class ToolExecutor {
 
   /**
    * Click a button by its number from the most recent map_buttons call.
+   * Uses trusted debugger click on the element's coordinates.
    * Cleans up data-bca-n attributes after use.
    */
   async pressMappedButton(tabId, n) {
@@ -467,41 +537,34 @@ export class ToolExecutor {
         return { success: false, error: `Button ${n} not in map. Valid range: 1–${map.length}.` };
       }
 
-      const pressResults = await chrome.scripting.executeScript({
+      // Get coordinates from content script via data-bca-n attribute
+      const coords = await this._sendToContent(tabId, { action: 'get_mapped_button_coords', n });
+
+      // Clean up data attributes regardless of outcome
+      await chrome.scripting.executeScript({
         target: { tabId },
-        func: (btnN) => {
-          const el = document.querySelector(`[data-bca-n="${btnN}"]`);
-          // Always clean up data attrs (even on failure) to avoid stale state
+        func: () => {
           document.querySelectorAll('[data-bca-n]').forEach(e => e.removeAttribute('data-bca-n'));
-
-          if (!el) {
-            return { success: false, error: `Element ${btnN} no longer in DOM (page may have changed — call map_buttons again)` };
-          }
-
-          el.scrollIntoView({ block: 'nearest', behavior: 'instant' });
-          el.focus();
-          el.click();
-
-          const tag = el.tagName.toLowerCase();
-          const text = (el.textContent || el.getAttribute('aria-label') || el.getAttribute('value') || '').trim().slice(0, 80);
-          return { success: true, tag, text };
         },
-        args: [n],
         world: 'MAIN'
       });
+
+      if (!coords.success) {
+        this._buttonMap.delete(tabId);
+        return { success: false, error: `Element ${n} no longer in DOM (page may have changed — call map_buttons again)` };
+      }
+
+      // Trusted click via CDP at the element's coordinates
+      await this.debugger.click(tabId, coords.x, coords.y);
 
       // Invalidate map — page may change after click
       this._buttonMap.delete(tabId);
 
-      const res = pressResults[0]?.result || { success: false, error: 'No script result' };
-      if (res.success) {
-        return {
-          success: true,
-          message: `Button ${n} clicked: <${res.tag}> "${res.text}"`,
-          n, tag: res.tag, text: res.text
-        };
-      }
-      return res;
+      return {
+        success: true,
+        message: `Button ${n} clicked (trusted): <${coords.tag}> "${coords.text}" at (${coords.x}, ${coords.y})`,
+        n, tag: coords.tag, text: coords.text
+      };
     } catch (err) {
       return { success: false, error: `press_mapped_button failed: ${err.message}` };
     }
