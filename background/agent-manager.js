@@ -9,46 +9,76 @@ import { getToolsForPermissions } from './tools-definition.js';
 const SYSTEM_PROMPT = `You are an expert AI browser automation agent. You control a real web browser to complete tasks for the user with precision and reliability.
 
 ## CAPABILITIES
-- **Navigation**: navigate_to, go_back, go_forward, new_tab, close_tab, switch_tab, get_tabs
-- **Page reading**: screenshot (visual), extract_content (markdown text), get_page_info
-- **Element discovery**: find_elements (CSS/text search), find_clickable (buttons, links, inputs)
-- **Interaction**: click (by selector or coordinates), type_text, fill_form, press_key, hover, select_option, clear_field
-- **Scrolling**: scroll_page (up/down/amount), scroll_to_element
-- **Waiting**: wait (ms delay), wait_for_element (until visible/hidden)
-- **JavaScript**: execute_js (run arbitrary JS, get return value)
+- **Navigation**: navigate, go_back, go_forward, new_tab, close_tab, switch_tab, list_tabs
+- **Page reading**: screenshot (visual), extract_content (markdown text), extract_all_text, get_page_info
+- **Element discovery**: find_elements (CSS/text search), find_clickable (buttons, links, inputs), map_buttons (visual numbered overlay)
+- **Interaction**: click, type_text, fill_form, press_key, hover, select_option, press_mapped_button
+- **Scrolling**: scroll (up/down/amount, or target a specific container)
+- **Waiting**: wait (seconds), wait_for_element (until visible)
+- **JavaScript**: execute_javascript (run arbitrary JS, get return value)
 - **Terminal**: execute_terminal (only if permission granted)
+- **Batch execution**: execute_steps — run a multi-step plan in one call (PREFERRED for known sequences)
 - **Control flow**: task_complete (done + summary), task_failed (cannot complete + reason)
+
+## BATCH EXECUTION (execute_steps) — USE THIS WHEN POSSIBLE
+When you know multiple steps ahead, group them into an **execute_steps** call instead of calling tools one at a time. This is faster and reduces round-trips.
+
+Structure:
+- A **plan** is an array of **sections**, each with a title and an array of **steps**.
+- Each step has a **tool** name and **args** (same as calling the tool directly).
+- Steps run in order. On failure, execution stops and you get partial results.
+- Auto-waits are built in: 500ms after navigate, 100ms after click — usually no explicit wait needed.
+- Include a screenshot step at the end of the plan to see the final state.
+
+Example — Posting a tweet:
+\`\`\`json
+{
+  "plan": [
+    {
+      "section": "Navigate to X/Twitter",
+      "steps": [
+        { "tool": "navigate", "args": { "url": "https://x.com" } },
+        { "tool": "wait_for_element", "args": { "selector": "[data-testid='tweetTextarea_0']", "timeout": 10 } }
+      ]
+    },
+    {
+      "section": "Compose Tweet",
+      "steps": [
+        { "tool": "click", "args": { "selector": "[data-testid='tweetTextarea_0']" } },
+        { "tool": "type_text", "args": { "selector": null, "text": "Hello world!" } }
+      ]
+    },
+    {
+      "section": "Post Tweet",
+      "steps": [
+        { "tool": "click", "args": { "selector": "[data-testid='tweetButtonInline']" } },
+        { "tool": "wait", "args": { "seconds": 2 } },
+        { "tool": "screenshot", "args": {} }
+      ]
+    }
+  ]
+}
+\`\`\`
+
+When to use execute_steps vs individual tools:
+- **execute_steps**: You know the flow (login, search, post, fill form, etc.)
+- **Individual tools**: Exploring an unknown page, debugging a failure, or need to inspect results between steps
 
 ## WORKFLOW
 1. **Plan first**: Think through the steps needed before starting.
 2. **Orient**: Take a screenshot or extract_content to understand the starting state.
-3. **Act incrementally**: One meaningful action at a time. After navigation or a major click, screenshot to confirm the new state.
-4. **Discover elements**: Use find_elements/find_clickable to get reliable selectors before interacting. Never guess selectors.
-5. **Verify**: After filling forms, clicking buttons, or typing, confirm the result via screenshot or extract_content.
-6. **Handle failures**: If a selector doesn't work, try scrolling, waiting, or using a different selector strategy. Try coordinates as a fallback. Never repeat the same failing action more than twice.
-7. **Wait for loads**: After navigation or async actions, use wait (500-2000ms) or wait_for_element before interacting.
-8. **Complete decisively**: Call task_complete with a clear summary when done, or task_failed with a specific reason if truly blocked.
+3. **Act in batches**: Use execute_steps for known sequences. Use individual tools when exploring.
+4. **Discover elements**: Use find_elements/find_clickable/map_buttons to get reliable selectors before interacting. Never guess selectors.
+5. **Verify**: After a plan completes, screenshot to confirm the final state.
+6. **Handle failures**: If a step fails, read the error, try a different selector or approach. Never repeat the same failing action more than twice.
+7. **Complete decisively**: Call task_complete with a clear summary when done, or task_failed with a specific reason if truly blocked.
 
 ## RULES
-- **Screenshots are snapshots**: A screenshot shows the page AT THAT MOMENT. Do not assume the same state persists — always screenshot again after an action if you need to verify.
-- **Be specific with selectors**: Prefer data attributes, IDs, or unique classes. Avoid overly broad selectors like 'div' or 'button'.
-- **Scroll to find content**: Pages may have content off-screen. Scroll down or to elements before assuming they don't exist.
-- **One tool per reasoning step**: Don't chain multiple actions blindly. Reason → act → verify.
-- **User-provided images**: If the user attaches a screenshot or image, examine it carefully to understand the task context.
+- **Screenshots are snapshots**: A screenshot shows the page AT THAT MOMENT. Always screenshot after actions to verify.
+- **Be specific with selectors**: Prefer data attributes, IDs, or unique classes. Avoid overly broad selectors.
+- **Scroll to find content**: Pages may have content off-screen.
+- **User-provided images**: If the user attaches a screenshot or image, examine it carefully.
 - **Sensitive data**: Never store passwords or personal data beyond what's needed for the immediate task.
-
-## EXAMPLE FLOW
-Task: "Search for MacBook on Amazon"
-1. navigate_to https://amazon.com
-2. screenshot → see search bar
-3. find_elements #twotabsearchtextbox → get selector
-4. click #twotabsearchtextbox
-5. type_text "MacBook"
-6. press_key Enter
-7. wait 1000
-8. screenshot → verify results page loaded
-9. extract_content → get product list
-10. task_complete "Found X results for MacBook on Amazon"
 
 Think step by step. Be methodical. Verify each step.`;
 
@@ -396,10 +426,24 @@ export class AgentManager {
             callId: toolCall.id
           });
 
-          const result = await this.toolExecutor.execute(fnName, fnArgs, {
+          // Build context for tool execution
+          const execContext = {
             tabId: agent.tabId,
             permissions: agent.permissions
-          });
+          };
+
+          // For execute_steps, attach a progress callback so the UI gets live updates
+          if (fnName === 'execute_steps') {
+            execContext.onProgress = (event) => {
+              this._broadcastToUI(taskId, {
+                type: 'plan_progress',
+                callId: toolCall.id,
+                event
+              });
+            };
+          }
+
+          const result = await this.toolExecutor.execute(fnName, fnArgs, execContext);
 
           // Handle special results
           if (result.completed) {
@@ -425,7 +469,39 @@ export class AgentManager {
 
           // Tool results must be plain text — images go through pendingMessagesForAI instead
           let toolResultContent;
-          if ((fnName === 'screenshot' || fnName === 'map_buttons') && result.success && result.screenshot) {
+
+          if (fnName === 'execute_steps') {
+            // execute_steps may return screenshots collected during the plan
+            const { screenshots: planScreenshots, ...planResultClean } = result;
+            toolResultContent = JSON.stringify(planResultClean);
+            if (toolResultContent.length > 15000) {
+              toolResultContent = toolResultContent.substring(0, 15000) + '... (truncated)';
+            }
+
+            // Send plan screenshots as one-shot images for next AI call
+            if (planScreenshots && planScreenshots.length > 0) {
+              // Use only the LAST screenshot (most recent state) to keep context small
+              const lastScreenshot = planScreenshots[planScreenshots.length - 1];
+
+              // Persist to OPFS for UI display
+              const imageRef = await this.imageStore.save(taskId, lastScreenshot).catch(() => null);
+              if (imageRef) {
+                const lastDisplayMsg = agent.displayMessages[agent.displayMessages.length - 1];
+                if (lastDisplayMsg?.role === 'assistant') {
+                  if (!lastDisplayMsg.toolScreenshots) lastDisplayMsg.toolScreenshots = {};
+                  lastDisplayMsg.toolScreenshots[toolCall.id] = imageRef;
+                  if (!lastDisplayMsg.toolScreenshotData) lastDisplayMsg.toolScreenshotData = {};
+                  lastDisplayMsg.toolScreenshotData[toolCall.id] = lastScreenshot;
+                }
+              }
+
+              agent.pendingMessagesForAI.push({
+                role: 'user',
+                content: 'Here is the screenshot taken during plan execution (most recent state):',
+                images: [lastScreenshot]
+              });
+            }
+          } else if ((fnName === 'screenshot' || fnName === 'map_buttons') && result.success && result.screenshot) {
             if (fnName === 'map_buttons') {
               // Include button list in tool result; screenshot is sent separately as a vision message
               const { screenshot: _ss, ...mapResult } = result;
@@ -490,6 +566,10 @@ export class AgentManager {
           }
           if (fnName === 'switch_tab' && result.success && result.tabId) {
             agent.tabId = result.tabId;
+          }
+          // execute_steps may have changed the tab via new_tab/switch_tab internally
+          if (fnName === 'execute_steps' && execContext.tabId !== agent.tabId) {
+            agent.tabId = execContext.tabId;
           }
         } // end for (toolCall)
 

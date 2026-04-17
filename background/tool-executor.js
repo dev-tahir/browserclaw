@@ -76,6 +76,8 @@ export class ToolExecutor {
           return await this.goBack(tabId);
         case 'go_forward':
           return await this.goForward(tabId);
+        case 'execute_steps':
+          return await this.executeSteps(args.plan, context);
         case 'task_complete':
           return { success: true, completed: true, summary: args.summary };
         case 'task_failed':
@@ -577,6 +579,162 @@ export class ToolExecutor {
     const actualSeconds = Math.min(seconds, maxWait);
     await new Promise(resolve => setTimeout(resolve, actualSeconds * 1000));
     return { success: true, waited: actualSeconds, reason: reason || 'No reason given' };
+  }
+
+  // ============ EXECUTE STEPS (Batch Plan Execution) ============
+
+  // Auto-wait durations after certain tools (ms)
+  static AUTO_WAITS = {
+    navigate: 500,
+    click: 100,
+    type_text: 50,
+    press_key: 50,
+    press_mapped_button: 100,
+    select_option: 100,
+    fill_form: 100,
+    go_back: 500,
+    go_forward: 500
+  };
+
+  // Tools that are NOT allowed inside execute_steps (terminal-level or meta)
+  static BLOCKED_STEPS = new Set(['execute_steps', 'task_complete', 'task_failed', 'execute_terminal']);
+
+  /**
+   * Execute a multi-section plan of tool calls sequentially.
+   * Emits progress via context.onProgress(event) callback.
+   * Stops on first failure and returns partial results.
+   *
+   * @param {Array} plan  - [{section, steps: [{tool, args}]}]
+   * @param {object} context - {tabId, permissions, onProgress}
+   */
+  async executeSteps(plan, context) {
+    const { onProgress } = context;
+    const allResults = [];
+    let screenshots = []; // collect screenshot data-urls for the caller
+
+    const emit = (event) => {
+      if (typeof onProgress === 'function') {
+        try { onProgress(event); } catch {}
+      }
+    };
+
+    emit({ type: 'plan_start', totalSections: plan.length, plan: plan.map(s => ({ section: s.section, stepCount: s.steps.length })) });
+
+    for (let si = 0; si < plan.length; si++) {
+      const section = plan[si];
+      emit({ type: 'section_start', sectionIndex: si, section: section.section, stepCount: section.steps.length });
+
+      const sectionResults = [];
+
+      for (let ti = 0; ti < section.steps.length; ti++) {
+        const step = section.steps[ti];
+        const { tool, args } = step;
+
+        // Safety: block dangerous/recursive tools
+        if (ToolExecutor.BLOCKED_STEPS.has(tool)) {
+          const err = { success: false, error: `Tool "${tool}" is not allowed inside execute_steps` };
+          sectionResults.push({ tool, args, result: err });
+          emit({ type: 'step_failed', sectionIndex: si, stepIndex: ti, tool, error: err.error });
+          allResults.push({ section: section.section, steps: sectionResults, completed: false });
+          return this._buildStepsPlanResult(allResults, plan, si, ti, screenshots);
+        }
+
+        emit({ type: 'step_start', sectionIndex: si, stepIndex: ti, tool, args });
+
+        // Execute the tool via the normal execute() pathway
+        // The context keeps the same tabId + permissions but we strip onProgress to avoid recursion
+        const result = await this.execute(tool, args || {}, {
+          tabId: context.tabId,
+          permissions: context.permissions
+        });
+
+        sectionResults.push({ tool, args, result });
+
+        // Collect screenshots
+        if ((tool === 'screenshot' || tool === 'map_buttons') && result.success && result.screenshot) {
+          screenshots.push(result.screenshot);
+        }
+
+        // Update tabId if a tab-switching tool was used
+        if (tool === 'new_tab' && result.success && result.tabId) {
+          context.tabId = result.tabId;
+        }
+        if (tool === 'switch_tab' && result.success && result.tabId) {
+          context.tabId = result.tabId;
+        }
+
+        if (!result.success) {
+          emit({ type: 'step_failed', sectionIndex: si, stepIndex: ti, tool, error: result.error });
+          allResults.push({ section: section.section, steps: sectionResults, completed: false });
+          return this._buildStepsPlanResult(allResults, plan, si, ti, screenshots);
+        }
+
+        emit({ type: 'step_done', sectionIndex: si, stepIndex: ti, tool, result });
+
+        // Auto-wait after certain tools
+        const autoWait = ToolExecutor.AUTO_WAITS[tool];
+        if (autoWait) {
+          await new Promise(r => setTimeout(r, autoWait));
+        }
+      }
+
+      allResults.push({ section: section.section, steps: sectionResults, completed: true });
+      emit({ type: 'section_done', sectionIndex: si, section: section.section });
+    }
+
+    emit({ type: 'plan_done', sectionsCompleted: allResults.length });
+
+    return {
+      success: true,
+      message: `Plan completed: ${allResults.length} sections executed`,
+      sections: allResults.map(s => ({
+        section: s.section,
+        completed: s.completed,
+        steps: s.steps.map(st => ({
+          tool: st.tool,
+          success: st.result.success,
+          message: st.result.message || st.result.error || ''
+        }))
+      })),
+      screenshots // returned for agent-manager to inject as images
+    };
+  }
+
+  /**
+   * Build the result object for a failed plan (partial execution).
+   */
+  _buildStepsPlanResult(completedSections, plan, failedSectionIdx, failedStepIdx, screenshots) {
+    // Compute remaining sections/steps
+    const failedSection = plan[failedSectionIdx];
+    const remaining = [];
+    // Remaining steps in the failed section
+    const remainingStepsInSection = failedSection.steps.slice(failedStepIdx + 1).map(s => s.tool);
+    if (remainingStepsInSection.length > 0) {
+      remaining.push({ section: failedSection.section, remainingSteps: remainingStepsInSection });
+    }
+    // Remaining full sections
+    for (let i = failedSectionIdx + 1; i < plan.length; i++) {
+      remaining.push({ section: plan[i].section, remainingSteps: plan[i].steps.map(s => s.tool) });
+    }
+
+    const lastSection = completedSections[completedSections.length - 1];
+    const failedStep = lastSection?.steps[lastSection.steps.length - 1];
+
+    return {
+      success: false,
+      error: `Plan failed at section "${failedSection.section}" step ${failedStepIdx + 1} (${failedStep?.tool}): ${failedStep?.result?.error || 'unknown error'}`,
+      sections: completedSections.map(s => ({
+        section: s.section,
+        completed: s.completed,
+        steps: s.steps.map(st => ({
+          tool: st.tool,
+          success: st.result.success,
+          message: st.result.message || st.result.error || ''
+        }))
+      })),
+      remaining,
+      screenshots
+    };
   }
 
   // ============ TERMINAL (Native Messaging) ============

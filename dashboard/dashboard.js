@@ -251,6 +251,11 @@
             updateToolCallResult(msg.callId, msg.result, msg.tool);
           }
           break;
+        case 'plan_progress':
+          if (msg.taskId === currentTaskId && currentView === 'detail') {
+            updatePlanProgress(msg.callId, msg.event);
+          }
+          break;
         case 'error':
           if (msg.taskId === currentTaskId && currentView === 'detail') {
             appendSystemMessage(`Error: ${msg.error}`, 'error');
@@ -928,6 +933,40 @@
       fullImg.alt = 'Screenshot';
       body.appendChild(fullImg);
       wrap.classList.add('has-output');
+    } else if (tool === 'execute_steps' && result.sections) {
+      // Render full plan result as section/step breakdown
+      const planEl = document.createElement('div');
+      planEl.className = 'plan-result';
+      for (const section of result.sections) {
+        const secEl = document.createElement('div');
+        secEl.className = `plan-section ${section.completed ? 'done' : 'failed'}`;
+        secEl.innerHTML = `<div class="plan-section-title">${section.completed ? '✅' : '❌'} ${escapeHtml(section.section)}</div>`;
+        const stepsEl = document.createElement('div');
+        stepsEl.className = 'plan-steps';
+        for (const step of section.steps) {
+          const stepEl = document.createElement('div');
+          stepEl.className = `plan-step ${step.success ? 'done' : 'failed'}`;
+          stepEl.textContent = `${step.success ? '✓' : '✗'} ${step.tool}${step.message ? ' — ' + step.message : ''}`;
+          stepsEl.appendChild(stepEl);
+        }
+        secEl.appendChild(stepsEl);
+        planEl.appendChild(secEl);
+      }
+      // Show remaining sections if plan failed
+      if (result.remaining && result.remaining.length > 0) {
+        const remEl = document.createElement('div');
+        remEl.className = 'plan-remaining';
+        remEl.innerHTML = '<div class="plan-remaining-title">⏭ Remaining (not executed)</div>';
+        for (const rem of result.remaining) {
+          const rEl = document.createElement('div');
+          rEl.className = 'plan-remaining-section';
+          rEl.textContent = `${rem.section}: ${rem.remainingSteps.join(', ')}`;
+          remEl.appendChild(rEl);
+        }
+        planEl.appendChild(remEl);
+      }
+      body.appendChild(planEl);
+      wrap.classList.add('has-output');
     } else if (result.message || !isSuccess) {
       const text = isSuccess ? result.message : (result.error || 'Failed');
       const textEl = document.createElement('div');
@@ -935,6 +974,117 @@
       textEl.textContent = text;
       body.appendChild(textEl);
       wrap.classList.add('has-output');
+    }
+
+    scrollChatToBottom();
+  }
+
+  // ============ PLAN PROGRESS (live updates for execute_steps) ============
+
+  function updatePlanProgress(callId, event) {
+    // Find or create the plan progress container inside the tool call wrapper
+    let wrap = chatMessages.querySelector(`.tci-wrap[data-call-id="${callId}"]`);
+    if (!wrap) return;
+
+    let progressEl = wrap.querySelector('.plan-progress');
+    if (!progressEl) {
+      progressEl = document.createElement('div');
+      progressEl.className = 'plan-progress';
+      const body = wrap.querySelector('.tci-body');
+      if (body) {
+        body.appendChild(progressEl);
+        wrap.classList.add('has-output');
+        wrap.classList.add('open');
+      }
+    }
+
+    switch (event.type) {
+      case 'plan_start': {
+        progressEl.innerHTML = '';
+        for (const sec of event.plan) {
+          const secEl = document.createElement('div');
+          secEl.className = 'plan-progress-section pending';
+          secEl.dataset.sectionIndex = event.plan.indexOf(sec);
+          secEl.innerHTML = `<div class="plan-progress-section-title"><span class="plan-progress-icon">⏳</span> ${escapeHtml(sec.section)} <span class="plan-progress-count">(${sec.stepCount} steps)</span></div><div class="plan-progress-steps"></div>`;
+          progressEl.appendChild(secEl);
+        }
+        break;
+      }
+      case 'section_start': {
+        const secEl = progressEl.querySelectorAll('.plan-progress-section')[event.sectionIndex];
+        if (secEl) {
+          secEl.classList.remove('pending');
+          secEl.classList.add('running');
+          const icon = secEl.querySelector('.plan-progress-icon');
+          if (icon) icon.textContent = '▶';
+        }
+        break;
+      }
+      case 'step_start': {
+        const secEl = progressEl.querySelectorAll('.plan-progress-section')[event.sectionIndex];
+        if (!secEl) break;
+        const stepsContainer = secEl.querySelector('.plan-progress-steps');
+        const stepEl = document.createElement('div');
+        stepEl.className = 'plan-progress-step running';
+        stepEl.dataset.stepIndex = event.stepIndex;
+        const argsStr = event.args ? Object.entries(event.args).map(([k, v]) => {
+          const val = typeof v === 'string' ? `"${v.length > 40 ? v.slice(0, 40) + '...' : v}"` : JSON.stringify(v);
+          return `${k}: ${val}`;
+        }).join('  ') : '';
+        stepEl.innerHTML = `<span class="plan-step-icon">⏳</span> <span class="plan-step-tool">${escapeHtml(event.tool)}</span>${argsStr ? ' <span class="plan-step-args">' + escapeHtml(argsStr) + '</span>' : ''}`;
+        stepsContainer.appendChild(stepEl);
+        break;
+      }
+      case 'step_done': {
+        const secEl = progressEl.querySelectorAll('.plan-progress-section')[event.sectionIndex];
+        if (!secEl) break;
+        const steps = secEl.querySelectorAll('.plan-progress-step');
+        const stepEl = steps[event.stepIndex];
+        if (stepEl) {
+          stepEl.classList.remove('running');
+          stepEl.classList.add('done');
+          const icon = stepEl.querySelector('.plan-step-icon');
+          if (icon) icon.textContent = '✓';
+        }
+        break;
+      }
+      case 'step_failed': {
+        const secEl = progressEl.querySelectorAll('.plan-progress-section')[event.sectionIndex];
+        if (!secEl) break;
+        const steps = secEl.querySelectorAll('.plan-progress-step');
+        const stepEl = steps[event.stepIndex];
+        if (stepEl) {
+          stepEl.classList.remove('running');
+          stepEl.classList.add('failed');
+          const icon = stepEl.querySelector('.plan-step-icon');
+          if (icon) icon.textContent = '✗';
+          if (event.error) {
+            const errEl = document.createElement('span');
+            errEl.className = 'plan-step-error';
+            errEl.textContent = ` — ${event.error}`;
+            stepEl.appendChild(errEl);
+          }
+        }
+        break;
+      }
+      case 'section_done': {
+        const secEl = progressEl.querySelectorAll('.plan-progress-section')[event.sectionIndex];
+        if (secEl) {
+          secEl.classList.remove('running');
+          secEl.classList.add('done');
+          const icon = secEl.querySelector('.plan-progress-icon');
+          if (icon) icon.textContent = '✅';
+        }
+        break;
+      }
+      case 'plan_done': {
+        // All sections completed — add a summary
+        const summary = document.createElement('div');
+        summary.className = 'plan-progress-summary done';
+        summary.textContent = `✅ Plan completed — ${event.sectionsCompleted} sections executed`;
+        progressEl.appendChild(summary);
+        break;
+      }
     }
 
     scrollChatToBottom();

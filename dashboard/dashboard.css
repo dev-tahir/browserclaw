@@ -1418,3 +1418,169 @@ textarea.form-input { resize: vertical; min-height: 80px; }
   display: block;
   margin-top: 2px;
 }
+
+/* ============ PLAN PROGRESS (execute_steps live UI) ============ */
+
+.plan-progress {
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+  padding: 8px 0 4px;
+}
+
+.plan-progress-section {
+  border-left: 3px solid var(--border);
+  padding-left: 10px;
+  transition: border-color 0.2s;
+}
+.plan-progress-section.running {
+  border-left-color: #818cf8;
+}
+.plan-progress-section.done {
+  border-left-color: #34d399;
+}
+.plan-progress-section.failed {
+  border-left-color: #f87171;
+}
+
+.plan-progress-section-title {
+  font-size: 12px;
+  font-weight: 600;
+  color: var(--text);
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  padding: 2px 0;
+}
+.plan-progress-icon {
+  font-size: 13px;
+  width: 18px;
+  text-align: center;
+  flex-shrink: 0;
+}
+.plan-progress-count {
+  font-weight: 400;
+  color: var(--text-muted);
+  font-size: 11px;
+}
+
+.plan-progress-steps {
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+  padding: 2px 0 4px 4px;
+}
+
+.plan-progress-step {
+  font-size: 11px;
+  color: var(--text-secondary);
+  display: flex;
+  align-items: baseline;
+  gap: 4px;
+  line-height: 1.5;
+  flex-wrap: wrap;
+}
+.plan-progress-step.done {
+  color: #34d399;
+}
+.plan-progress-step.failed {
+  color: #f87171;
+}
+.plan-progress-step.running {
+  color: var(--text);
+}
+
+.plan-step-icon {
+  width: 14px;
+  text-align: center;
+  flex-shrink: 0;
+  font-size: 11px;
+}
+.plan-step-tool {
+  font-weight: 600;
+  font-family: 'SF Mono', 'Fira Code', monospace;
+  font-size: 11px;
+}
+.plan-step-args {
+  color: var(--text-muted);
+  font-size: 10px;
+  font-family: 'SF Mono', 'Fira Code', monospace;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  max-width: 400px;
+}
+.plan-step-error {
+  color: #f87171;
+  font-size: 10px;
+}
+
+.plan-progress-summary {
+  font-size: 12px;
+  font-weight: 500;
+  padding: 4px 0;
+  color: var(--text-muted);
+}
+.plan-progress-summary.done {
+  color: #34d399;
+}
+
+/* ============ PLAN RESULT (static, after execute_steps completes) ============ */
+
+.plan-result {
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+  padding: 6px 0;
+}
+.plan-section {
+  border-left: 3px solid var(--border);
+  padding-left: 10px;
+}
+.plan-section.done {
+  border-left-color: #34d399;
+}
+.plan-section.failed {
+  border-left-color: #f87171;
+}
+.plan-section-title {
+  font-size: 12px;
+  font-weight: 600;
+  color: var(--text);
+  padding: 2px 0;
+}
+.plan-steps {
+  display: flex;
+  flex-direction: column;
+  gap: 1px;
+  padding: 2px 0 4px 4px;
+}
+.plan-step {
+  font-size: 11px;
+  color: var(--text-secondary);
+  line-height: 1.5;
+}
+.plan-step.done {
+  color: #34d399;
+}
+.plan-step.failed {
+  color: #f87171;
+}
+
+.plan-remaining {
+  margin-top: 4px;
+  padding-top: 4px;
+  border-top: 1px dashed var(--border);
+}
+.plan-remaining-title {
+  font-size: 11px;
+  font-weight: 600;
+  color: var(--text-muted);
+  margin-bottom: 2px;
+}
+.plan-remaining-section {
+  font-size: 10px;
+  color: var(--text-muted);
+  padding-left: 4px;
+  line-height: 1.5;
+}

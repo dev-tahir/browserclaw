@@ -372,6 +372,47 @@ export const TOOLS = [
   {
     type: 'function',
     function: {
+      name: 'execute_steps',
+      description: `Execute a multi-step plan in a single call. Groups steps into named sections and runs them sequentially. 
+This is the PREFERRED tool when you know 2+ steps ahead. It reduces round-trips and is much faster than calling tools one at a time.
+Each step is a tool call (navigate, click, type_text, press_key, wait, screenshot, etc.). 
+Steps run in order within each section. On failure the plan stops and returns all results so far plus the error.
+Auto-waits: 500ms after navigate, 100ms after click — no need for explicit wait steps in most cases.
+Use this for common flows like: navigate → click → type → click, or search → screenshot → extract.`,
+      parameters: {
+        type: 'object',
+        properties: {
+          plan: {
+            type: 'array',
+            description: 'Array of sections, each with a title and steps',
+            items: {
+              type: 'object',
+              properties: {
+                section: { type: 'string', description: 'Human-readable section title (e.g. "Navigate to Twitter", "Compose Tweet")' },
+                steps: {
+                  type: 'array',
+                  description: 'Steps to execute in this section',
+                  items: {
+                    type: 'object',
+                    properties: {
+                      tool: { type: 'string', description: 'Tool name to call (navigate, click, type_text, press_key, wait, screenshot, extract_content, find_elements, find_clickable, scroll, hover, wait_for_element, get_page_info, map_buttons, press_mapped_button, select_option, fill_form, execute_javascript, new_tab, go_back, go_forward)' },
+                      args: { type: 'object', description: 'Arguments for the tool (same as calling the tool directly)' }
+                    },
+                    required: ['tool', 'args']
+                  }
+                }
+              },
+              required: ['section', 'steps']
+            }
+          }
+        },
+        required: ['plan']
+      }
+    }
+  },
+  {
+    type: 'function',
+    function: {
       name: 'task_complete',
       description: 'Mark the current task as complete. Call this when you have finished the assigned task.',
       parameters: {
