@@ -1,6 +1,11 @@
 // Skills Manager - Load, save, reset, and manage automation skill files.
+// Supports two formats:
+//   .txt  — legacy prompt-based skills (appended to system prompt)
+//   .json — script skills (executed directly by SkillExecutor)
 // Bundled skills live in skills/*.txt (fetched via chrome.runtime.getURL).
 // User customisations / new skills are persisted in chrome.storage.local.
+
+import { validateSkill, skillSummary } from './skill-format.js';
 
 const BUNDLED_SKILL_IDS = ['x_com'];
 
@@ -146,8 +151,10 @@ export class SkillsManager {
   // ── Public: build prompt appendix from selected skills ────────────────────
   // mode: 'auto'   → include all skills
   //       'manual' → include only skills whose id is in selectedIds
+  // Only .txt (prompt-based) skills are included; .json scripts are executed directly.
   getSkillsForPrompt(allSkills, selectedIds = [], mode = 'auto') {
-    const toInclude = mode === 'auto' ? allSkills : allSkills.filter(s => selectedIds.includes(s.id));
+    const toInclude = (mode === 'auto' ? allSkills : allSkills.filter(s => selectedIds.includes(s.id)))
+      .filter(s => s.format === 'txt');      // skip script skills
     if (toInclude.length === 0) return '';
 
     let block = '\n\n## SKILLS / DOMAIN KNOWLEDGE\n';
@@ -157,5 +164,90 @@ export class SkillsManager {
       block += skill.body + '\n\n';
     }
     return block.trimEnd();
+  }
+
+  // ════════════════════════════════════════════════════════════════════════════
+  //  SCRIPT SKILLS (.json)
+  // ════════════════════════════════════════════════════════════════════════════
+
+  // ── Public: get all script skills ──────────────────────────────────────────
+  async getScriptSkills() {
+    const data = await chrome.storage.local.get('scriptSkillIds');
+    const ids = data.scriptSkillIds || [];
+    const skills = [];
+    for (const id of ids) {
+      const d = await chrome.storage.local.get(`sskill_${id}`);
+      const raw = d[`sskill_${id}`];
+      if (!raw) continue;
+      try {
+        const skill = typeof raw === 'string' ? JSON.parse(raw) : raw;
+        skill._id = id;
+        skill._format = 'json';
+        skill._summary = skillSummary(skill);
+        skills.push(skill);
+      } catch { /* corrupt entry — skip */ }
+    }
+    return skills;
+  }
+
+  // ── Public: get one script skill by id ─────────────────────────────────────
+  async getScriptSkill(id) {
+    const d = await chrome.storage.local.get(`sskill_${id}`);
+    const raw = d[`sskill_${id}`];
+    if (!raw) return null;
+    try {
+      const skill = typeof raw === 'string' ? JSON.parse(raw) : raw;
+      skill._id = id;
+      return skill;
+    } catch {
+      return null;
+    }
+  }
+
+  // ── Public: save (create or update) a script skill ─────────────────────────
+  async saveScriptSkill(id, skillObj) {
+    const validation = validateSkill(skillObj);
+    if (!validation.valid) {
+      throw new Error(`Invalid skill: ${validation.errors.join('; ')}`);
+    }
+    // Store as JSON string
+    await chrome.storage.local.set({ [`sskill_${id}`]: JSON.stringify(skillObj) });
+    // Add to index
+    const data = await chrome.storage.local.get('scriptSkillIds');
+    const ids = data.scriptSkillIds || [];
+    if (!ids.includes(id)) {
+      ids.push(id);
+      await chrome.storage.local.set({ scriptSkillIds: ids });
+    }
+  }
+
+  // ── Public: delete a script skill ──────────────────────────────────────────
+  async deleteScriptSkill(id) {
+    await chrome.storage.local.remove(`sskill_${id}`);
+    const data = await chrome.storage.local.get('scriptSkillIds');
+    const ids = (data.scriptSkillIds || []).filter(i => i !== id);
+    await chrome.storage.local.set({ scriptSkillIds: ids });
+  }
+
+  // ── Public: get merged list of all skills (both formats) ───────────────────
+  async getAllSkillsMerged() {
+    const txtSkills = await this.getSkills();
+    // Tag txt skills with format marker
+    for (const s of txtSkills) s.format = 'txt';
+
+    const scriptSkills = await this.getScriptSkills();
+    const merged = [];
+    for (const s of scriptSkills) {
+      merged.push({
+        id: s._id,
+        name: s.name,
+        description: s.description || '',
+        domain: '',
+        format: 'json',
+        summary: s._summary,
+        scriptData: s,
+      });
+    }
+    return [...txtSkills, ...merged];
   }
 }

@@ -378,6 +378,8 @@ This is the PREFERRED tool when you know 2+ steps ahead. It reduces round-trips 
 Each step is a tool call (navigate, click, type_text, press_key, wait, screenshot, etc.). 
 Steps run in order within each section. On failure the plan stops and returns all results so far plus the error.
 Auto-waits: 500ms after navigate, 100ms after click — no need for explicit wait steps in most cases.
+PAGE MONITORING: Every action tool automatically captures before/after page state. If the URL, title, or notable DOM elements (modals, dialogs, alerts, forms, errors) change, a "pageChanges" object is included showing what appeared/disappeared.
+VERIFICATION: Each step can include an optional "verify" object with assertions (url_contains, element_exists, element_absent, title_contains, text_contains, etc.). If verification fails, the plan stops with a clear error message.
 Use this for common flows like: navigate → click → type → click, or search → screenshot → extract.`,
       parameters: {
         type: 'object',
@@ -396,7 +398,20 @@ Use this for common flows like: navigate → click → type → click, or search
                     type: 'object',
                     properties: {
                       tool: { type: 'string', description: 'Tool name to call (navigate, click, type_text, press_key, wait, screenshot, extract_content, find_elements, find_clickable, scroll, hover, wait_for_element, get_page_info, map_buttons, press_mapped_button, select_option, fill_form, execute_javascript, new_tab, go_back, go_forward)' },
-                      args: { type: 'object', description: 'Arguments for the tool (same as calling the tool directly)' }
+                      args: { type: 'object', description: 'Arguments for the tool (same as calling the tool directly)' },
+                      verify: {
+                        type: 'object',
+                        description: 'Optional post-step assertions. If any check fails the plan stops with a clear error. Use to confirm page state after important actions.',
+                        properties: {
+                          url_contains: { type: 'string', description: 'URL must contain this substring after the step' },
+                          url_not_contains: { type: 'string', description: 'URL must NOT contain this substring' },
+                          title_contains: { type: 'string', description: 'Page title must contain this (case-insensitive)' },
+                          element_exists: { type: 'string', description: 'CSS selector that must exist in DOM after the step' },
+                          element_absent: { type: 'string', description: 'CSS selector that must NOT be visible after the step (e.g. a modal that should have closed)' },
+                          text_contains: { type: 'string', description: 'Page body text must contain this string' },
+                          text_absent: { type: 'string', description: 'Page body text must NOT contain this string' }
+                        }
+                      }
                     },
                     required: ['tool', 'args']
                   }

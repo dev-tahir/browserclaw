@@ -4,6 +4,8 @@
 import { AgentManager } from './agent-manager.js';
 import { AIProvider } from './ai-provider.js';
 import { SkillsManager } from './skills-manager.js';
+import { TOOLS } from './tools-definition.js';
+import { validateSkill } from './skill-format.js';
 
 const agentManager = new AgentManager();
 const aiProvider = new AIProvider();
@@ -90,8 +92,49 @@ async function handleMessage(message, sender) {
       await skillsManager.deleteSkill(message.id);
       return { success: true };
 
-    case 'generateSkillFromChat':
-      return await generateSkillFromChat(message.taskId);
+    // ---- Script Skills (.json) ----
+    case 'getScriptSkills':
+      return { success: true, skills: await skillsManager.getScriptSkills() };
+
+    case 'getScriptSkill':
+      return { success: true, skill: await skillsManager.getScriptSkill(message.id) };
+
+    case 'saveScriptSkill':
+      await skillsManager.saveScriptSkill(message.id, message.skill);
+      return { success: true };
+
+    case 'deleteScriptSkill':
+      await skillsManager.deleteScriptSkill(message.id);
+      return { success: true };
+
+    case 'getAllSkills':
+      return { success: true, skills: await skillsManager.getAllSkillsMerged() };
+
+    case 'runSkillScript': {
+      const skill = await skillsManager.getScriptSkill(message.skillId);
+      if (!skill) return { success: false, error: 'Skill not found' };
+      const result = await agentManager.runSkillScript(
+        message.taskId, skill, message.inputValues || {},
+        { provider: message.provider, model: message.model, reasoningEffort: message.reasoningEffort }
+      );
+      return { success: result.success, error: result.error, stepsRun: result.stepsRun };
+    }
+
+    case 'validateSkillJSON': {
+      try {
+        const obj = typeof message.skill === 'string' ? JSON.parse(message.skill) : message.skill;
+        const v = validateSkill(obj);
+        return { success: v.valid, errors: v.errors };
+      } catch (e) {
+        return { success: false, errors: [`JSON parse error: ${e.message}`] };
+      }
+    }
+
+    case 'getToolsInfo':
+      return { success: true, toolsInfo: getToolsInfoText() };
+
+    case 'generateSkillWithAI':
+      return await generateSkillWithAI(message);
 
     // ---- Agent Management ----
     case 'createAgent': {
@@ -111,6 +154,10 @@ async function handleMessage(message, sender) {
 
     case 'startAgent':
       await agentManager.startAgent(message.taskId, message.message);
+      return { success: true };
+
+    case 'ensureAgentTab':
+      await agentManager.ensureTab(message.taskId);
       return { success: true };
 
     case 'stopAgent':
@@ -217,59 +264,67 @@ async function saveSettings(settings) {
 
 // ============ HELPERS ============
 
-// ============ SKILL GENERATION ============
-
-async function generateSkillFromChat(taskId) {
-  const agent = agentManager.getAgent(taskId);
-  if (!agent) return { success: false, error: 'Task not found' };
-
-  // Build a readable conversation summary (user + assistant text only, no images)
-  const lines = agent.displayMessages
-    .filter(m => m.role === 'user' || m.role === 'assistant')
-    .map(m => {
-      if (m.role === 'user') return `User: ${m.content}`;
-      let text = m.content || '';
-      if (m.tool_calls && m.tool_calls.length > 0) {
-        const tc = m.tool_calls.map(t => `  - ${t.function.name}(${t.function.arguments})`).join('\n');
-        text += (text ? '\n' : '') + 'Tool calls:\n' + tc;
-      }
-      return `Assistant: ${text}`;
+function getToolsInfoText() {
+  const skip = new Set(['task_complete', 'task_failed', 'execute_steps']);
+  return TOOLS
+    .filter(t => !skip.has(t.function.name))
+    .map(t => {
+      const f = t.function;
+      const params = f.parameters?.properties || {};
+      const required = f.parameters?.required || [];
+      const paramLines = Object.entries(params).map(([k, v]) => {
+        const req = required.includes(k) ? ' (required)' : '';
+        const type = v.type || 'any';
+        return `    ${k}: ${type}${req} — ${v.description || ''}`;
+      });
+      return `${f.name} — ${f.description}\n${paramLines.length ? paramLines.join('\n') : '    (no parameters)'}`;
     })
     .join('\n\n');
+}
 
-  const systemPrompt = `You are an expert browser automation knowledge extractor.
-Your job is to create a reusable skill .txt file from a browser automation conversation.
+// ============ SKILL GENERATION ============
 
-The skill file format:
-name: Skill Name
-domain: example.com
-description: Brief description
-version: 1.0
----
-[Plain text automation knowledge: reliable selectors, step-by-step workflows, gotchas, URL patterns]
+async function generateSkillWithAI({ provider, model, reasoningEffort, instructions, meta, taskId }) {
+  const userParts = [];
+  if (meta.name)        userParts.push(`Skill name: ${meta.name}`);
+  if (meta.domain)      userParts.push(`Domain/site: ${meta.domain}`);
+  if (meta.description) userParts.push(`Description: ${meta.description}`);
 
-Be concise, practical, and specific. Focus on information that helps future automation of the same site.`;
+  // Include conversation context when opened from a task
+  if (taskId) {
+    const agent = agentManager.getAgent(taskId);
+    if (agent) {
+      const convoLines = agent.displayMessages
+        .filter(m => m.role === 'user' || m.role === 'assistant')
+        .map(m => {
+          if (m.role === 'user') return `User: ${m.content}`;
+          let text = m.content || '';
+          if (m.tool_calls && m.tool_calls.length > 0) {
+            const tc = m.tool_calls.map(t => `  - ${t.function.name}(${t.function.arguments})`).join('\n');
+            text += (text ? '\n' : '') + 'Tool calls:\n' + tc;
+          }
+          return `Assistant: ${text}`;
+        })
+        .join('\n\n');
+      if (convoLines) {
+        userParts.push(`\n=== CONVERSATION CONTEXT ===\n${convoLines}\n=== END CONVERSATION ===`);
+      }
+    }
+  }
 
-  const userPrompt = `Extract a reusable automation skill from this conversation. Identify the domain/site being automated and document:
-- Reliable CSS selectors and element identifiers that were used
-- Step-by-step workflows that succeeded
-- URL patterns and navigation flows
-- Common gotchas encountered and how to handle them
-
-Conversation:
-${lines}
-
-Generate the full skill file now:`;
+  const userPrompt = userParts.length > 0
+    ? `Create a skill file for the following:\n${userParts.join('\n')}\n\nGenerate the full skill file now:`
+    : 'Generate a skill file based on the instructions above.';
 
   const messages = [
-    { role: 'system', content: systemPrompt },
+    { role: 'system', content: instructions },
     { role: 'user', content: userPrompt }
   ];
 
   let fullText = '';
   try {
     await aiProvider.loadSettings();
-    for await (const chunk of aiProvider.stream(agent.provider, agent.model, messages, [], 'none')) {
+    for await (const chunk of aiProvider.stream(provider, model, messages, [], reasoningEffort || 'none')) {
       if (chunk.type === 'text') fullText += chunk.content;
       if (chunk.done) break;
     }

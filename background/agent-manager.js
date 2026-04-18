@@ -5,6 +5,7 @@ import { AIProvider } from './ai-provider.js';
 import { ToolExecutor } from './tool-executor.js';
 import { ImageStore } from './image-store.js';
 import { getToolsForPermissions } from './tools-definition.js';
+import { SkillExecutor } from './skill-executor.js';
 
 const SYSTEM_PROMPT = `You are an expert AI browser automation agent. You control a real web browser to complete tasks for the user with precision and reliability.
 
@@ -87,6 +88,7 @@ export class AgentManager {
     this.agents = new Map(); // taskId -> AgentState
     this.aiProvider = new AIProvider();
     this.toolExecutor = new ToolExecutor();
+    this.skillExecutor = new SkillExecutor(this.toolExecutor, this.aiProvider);
     this.imageStore = new ImageStore(); // OPFS-backed image persistence
     this.ports = new Map(); // taskId -> Set<Port> (for streaming to UI)
   }
@@ -138,10 +140,7 @@ export class AgentManager {
     if (agent.status === 'running') throw new Error('Agent already running');
 
     // Create a new tab for the agent
-    if (!agent.tabId) {
-      const tab = await chrome.tabs.create({ active: false });
-      agent.tabId = tab.id;
-    }
+    await this.ensureTab(taskId);
 
     agent.status = 'running';
     agent.updatedAt = Date.now();
@@ -163,6 +162,20 @@ export class AgentManager {
     this._runAgentLoop(taskId);
 
     return agent;
+  }
+
+  async ensureTab(taskId) {
+    const agent = this.agents.get(taskId);
+    if (!agent) throw new Error(`Agent ${taskId} not found`);
+    if (!agent.tabId) {
+      const tab = await chrome.tabs.create({ active: true });
+      agent.tabId = tab.id;
+      await this._persistAgent(agent);
+    } else {
+      // Make existing tab visible
+      try { await chrome.tabs.update(agent.tabId, { active: true }); } catch {}
+    }
+    return agent.tabId;
   }
 
   async stopAgent(taskId) {
@@ -281,6 +294,80 @@ export class AgentManager {
           allPorts.delete(port);
         }
       }
+    }
+  }
+
+  // ============ SKILL SCRIPT EXECUTION ============
+
+  async runSkillScript(taskId, skill, inputValues, modelOverride) {
+    const agent = this.agents.get(taskId);
+    if (!agent) throw new Error('Agent not found');
+    if (agent.isProcessing) throw new Error('Agent is already processing');
+
+    // Ensure the agent has a tab for browser actions
+    await this.ensureTab(taskId);
+
+    agent.isProcessing = true;
+    agent.status = 'running';
+    agent.abortController = new AbortController();
+
+    this._broadcastToUI(taskId, { type: 'status', status: 'running' });
+    this._broadcastToUI(taskId, { type: 'skill_script_start', skill: { name: skill.name, steps: skill.steps.length } });
+
+    await this.aiProvider.loadSettings();
+
+    const context = {
+      tabId: agent.tabId,
+      permissions: agent.permissions,
+      provider: modelOverride?.provider || agent.provider,
+      model: modelOverride?.model || agent.model,
+      reasoningEffort: modelOverride?.reasoningEffort || agent.reasoningEffort || 'low',
+    };
+
+    const onProgress = (event) => {
+      // Keep tabId in sync if actions changed it
+      if (context.tabId !== agent.tabId) agent.tabId = context.tabId;
+      this._broadcastToUI(taskId, { type: 'skill_progress', event });
+    };
+
+    try {
+      const result = await this.skillExecutor.run(skill, inputValues, context, onProgress, {
+        signal: agent.abortController.signal,
+      });
+
+      // Sync tabId back
+      agent.tabId = context.tabId;
+
+      if (result.success) {
+        agent.status = 'completed';
+        this._broadcastToUI(taskId, { type: 'status', status: 'completed', summary: `Skill "${skill.name}" completed (${result.stepsRun} steps)` });
+      } else {
+        agent.status = 'error';
+        agent.error = result.error;
+        this._broadcastToUI(taskId, { type: 'status', status: 'error', error: result.error });
+      }
+
+      // Store as a display message for the chat view
+      agent.displayMessages.push({
+        role: 'assistant',
+        content: result.success
+          ? `Skill **${skill.name}** completed successfully (${result.stepsRun} steps).`
+          : `Skill **${skill.name}** failed at step ${result.stepsRun}: ${result.error}`,
+        timestamp: Date.now(),
+      });
+
+      return result;
+    } catch (err) {
+      agent.status = 'error';
+      agent.error = err.message;
+      this._broadcastToUI(taskId, { type: 'error', error: err.message });
+      this._broadcastToUI(taskId, { type: 'status', status: 'error', error: err.message });
+      return { success: false, error: err.message, stepsRun: 0 };
+    } finally {
+      agent.isProcessing = false;
+      agent.abortController = null;
+      agent.updatedAt = Date.now();
+      await this._persistAgent(agent);
     }
   }
 
@@ -475,7 +562,7 @@ export class AgentManager {
             const { screenshots: planScreenshots, ...planResultClean } = result;
             toolResultContent = JSON.stringify(planResultClean);
             if (toolResultContent.length > 15000) {
-              toolResultContent = toolResultContent.substring(0, 15000) + '... (truncated)';
+              toolResultContent = JSON.stringify({ success: planResultClean.success, summary: `Plan executed ${planResultClean.sections?.length || 0} sections. Result truncated for brevity.`, totalSteps: planResultClean.totalSteps, failedStep: planResultClean.failedStep || null });
             }
 
             // Send plan screenshots as one-shot images for next AI call
@@ -535,7 +622,9 @@ export class AgentManager {
           } else {
             toolResultContent = JSON.stringify(result);
             if (toolResultContent.length > 10000) {
-              toolResultContent = toolResultContent.substring(0, 10000) + '... (truncated)';
+              const compact = { success: result.success !== false, message: typeof result.message === 'string' ? result.message.substring(0, 2000) : 'Result truncated — too large to include.' };
+              if (result.pageChanges) compact.pageChanges = result.pageChanges;
+              toolResultContent = JSON.stringify(compact);
             }
           }
 

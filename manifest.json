@@ -45,7 +45,7 @@
   "chrome_url_overrides": {},
   "web_accessible_resources": [
     {
-      "resources": ["dashboard/dashboard.html", "skills/*.txt"],
+      "resources": ["dashboard/dashboard.html", "dashboard/skill-diagram.js", "background/skill-format.js", "skills/*.txt"],
       "matches": ["<all_urls>"]
     }
   ]

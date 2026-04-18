@@ -37,10 +37,16 @@
     <div id="skillsRow" class="skills-row">
       <div class="skills-row-header">
         <span class="skills-row-title">Skills</span>
-        <button id="btnAddSkill" class="btn btn-ghost btn-sm">
-          <svg width="12" height="12" viewBox="0 0 16 16" fill="none"><path d="M8 3v10M3 8h10" stroke="currentColor" stroke-width="2" stroke-linecap="round"/></svg>
-          Add Skill
-        </button>
+        <div class="skills-row-actions">
+          <button id="btnAddSkill" class="btn btn-ghost btn-sm">
+            <svg width="12" height="12" viewBox="0 0 16 16" fill="none"><path d="M8 3v10M3 8h10" stroke="currentColor" stroke-width="2" stroke-linecap="round"/></svg>
+            Add Skill
+          </button>
+          <button id="btnAddScriptSkill" class="btn btn-ghost btn-sm" title="Create a script skill (JSON)">
+            <svg width="12" height="12" viewBox="0 0 16 16" fill="none"><path d="M8 3v10M3 8h10" stroke="currentColor" stroke-width="2" stroke-linecap="round"/></svg>
+            Script Skill
+          </button>
+        </div>
       </div>
       <div id="skillsContainer" class="skills-container">
         <div class="skills-empty">No skills yet — add one to give agents domain knowledge.</div>
@@ -339,15 +345,75 @@
             <input type="text" id="newSkillDescription" placeholder="Brief description of what this skill covers" class="form-input">
           </div>
         </div>
-        <div class="form-group">
-          <div class="skill-content-label-row">
-            <label>Skill Content</label>
-            <button id="btnGenerateSkill" class="btn btn-ghost btn-sm skill-generate-btn" style="display:none">
-              <svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M12 2a10 10 0 110 20A10 10 0 0112 2z"/><path d="M12 6v6l4 2"/></svg>
-              Generate from conversation
-            </button>
-            <span id="generateSkillStatus" class="generate-skill-status"></span>
+
+        <!-- AI Generation Section -->
+        <div class="cs-ai-section">
+          <div class="cs-ai-header" id="csAiToggle">
+            <svg class="cs-ai-chevron" width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5"><path d="M9 18l6-6-6-6"/></svg>
+            <span>Generate with AI</span>
+            <span class="cs-ai-badge">recommended</span>
           </div>
+          <div class="cs-ai-body" id="csAiBody">
+            <!-- Model selection (same structure as new task) -->
+            <div class="cs-ai-model-row">
+              <div class="form-group">
+                <label>AI Provider</label>
+                <div class="provider-tabs" id="csProviderTabs">
+                  <button class="provider-tab active" data-provider="ollama">Ollama (Local)</button>
+                  <button class="provider-tab" data-provider="openrouter">OpenRouter (Cloud)</button>
+                </div>
+              </div>
+              <div class="form-group">
+                <label>Model</label>
+                <select id="csModelSelect" class="form-select"></select>
+                <div id="csOrModelPicker" class="or-model-picker" style="display:none">
+                  <div class="or-model-trigger" id="csOrModelTrigger" tabindex="0">
+                    <span id="csOrModelLabel">Select a model…</span>
+                    <svg width="10" height="6" viewBox="0 0 10 6" fill="none"><path d="M1 1l4 4 4-4" stroke="currentColor" stroke-width="1.5" stroke-linecap="round"/></svg>
+                  </div>
+                  <div class="or-model-dropdown" id="csOrModelDropdown">
+                    <div class="or-model-search-wrap">
+                      <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round"><circle cx="11" cy="11" r="8"/><path d="M21 21l-4.35-4.35"/></svg>
+                      <input type="text" id="csOrModelSearch" placeholder="Search models…" autocomplete="off" spellcheck="false">
+                    </div>
+                    <div id="csOrModelList" class="or-model-list"></div>
+                  </div>
+                </div>
+              </div>
+              <div class="form-group">
+                <label>Reasoning</label>
+                <div class="reasoning-selector" id="csReasoningSelector">
+                  <button class="reasoning-btn" data-value="none">None</button>
+                  <button class="reasoning-btn" data-value="low">Low</button>
+                  <button class="reasoning-btn active" data-value="medium">Medium</button>
+                  <button class="reasoning-btn" data-value="high">High</button>
+                </div>
+              </div>
+            </div>
+
+            <!-- Instructions to AI (editable) -->
+            <div class="form-group">
+              <div class="cs-instructions-label-row">
+                <label>Instructions to AI
+                  <span class="form-hint">Edit to customize what the AI generates. Includes all available tools.</span>
+                </label>
+                <button id="btnResetCsInstructions" class="btn btn-ghost btn-xs">Reset to default</button>
+              </div>
+              <textarea id="csInstructions" class="form-input cs-instructions-textarea" rows="8" spellcheck="false"></textarea>
+            </div>
+
+            <div class="cs-ai-actions">
+              <button id="btnGenerateSkillAI" class="btn btn-primary">
+                <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M13 2L3 14h9l-1 8 10-12h-9l1-8z"/></svg>
+                Generate Skill
+              </button>
+              <span id="generateSkillStatus" class="generate-skill-status"></span>
+            </div>
+          </div>
+        </div>
+
+        <div class="form-group">
+          <label>Skill Content</label>
           <textarea id="newSkillContent" class="form-input skill-textarea" rows="16"
             placeholder="Describe automation knowledge, CSS selectors, common flows, gotchas, URL patterns..."></textarea>
         </div>
@@ -359,6 +425,163 @@
     </div>
   </div>
 
-  <script src="dashboard.js"></script>
+  <!-- ====== CREATE SCRIPT SKILL MODAL ====== -->
+  <div id="createScriptSkillModal" class="modal-overlay">
+    <div class="modal skill-modal-wide">
+      <div class="modal-header">
+        <h2>Create Script Skill</h2>
+        <button class="modal-close" id="btnCloseCreateScript">&times;</button>
+      </div>
+      <div class="modal-body">
+        <p class="form-hint" style="margin-bottom:12px">
+          Script skills execute directly — action steps call tools without AI cost.
+          Use <code>{{input.name}}</code> for user parameters and <code>{{var.name}}</code> for variables from previous steps.
+        </p>
+
+        <div class="create-skill-meta">
+          <div class="form-group">
+            <label>Skill ID <span style="color:var(--danger)">*</span></label>
+            <input type="text" id="ssId" placeholder="e.g. github_create_issue" class="form-input" style="font-family:var(--font-mono,monospace)">
+          </div>
+        </div>
+
+        <!-- AI Generation Section for Script -->
+        <div class="cs-ai-section">
+          <div class="cs-ai-header" id="ssAiToggle">
+            <svg class="cs-ai-chevron" width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5"><path d="M9 18l6-6-6-6"/></svg>
+            <span>Generate with AI</span>
+            <span class="cs-ai-badge">recommended</span>
+          </div>
+          <div class="cs-ai-body" id="ssAiBody">
+            <div class="cs-ai-model-row">
+              <div class="form-group">
+                <label>AI Provider</label>
+                <div class="provider-tabs" id="ssProviderTabs">
+                  <button class="provider-tab active" data-provider="ollama">Ollama (Local)</button>
+                  <button class="provider-tab" data-provider="openrouter">OpenRouter (Cloud)</button>
+                </div>
+              </div>
+              <div class="form-group">
+                <label>Model</label>
+                <select id="ssModelSelect" class="form-select"></select>
+                <div id="ssOrModelPicker" class="or-model-picker" style="display:none">
+                  <div class="or-model-trigger" id="ssOrModelTrigger" tabindex="0">
+                    <span id="ssOrModelLabel">Select a model…</span>
+                    <svg width="10" height="6" viewBox="0 0 10 6" fill="none"><path d="M1 1l4 4 4-4" stroke="currentColor" stroke-width="1.5" stroke-linecap="round"/></svg>
+                  </div>
+                  <div class="or-model-dropdown" id="ssOrModelDropdown">
+                    <div class="or-model-search-wrap">
+                      <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round"><circle cx="11" cy="11" r="8"/><path d="M21 21l-4.35-4.35"/></svg>
+                      <input type="text" id="ssOrModelSearch" placeholder="Search models…" autocomplete="off" spellcheck="false">
+                    </div>
+                    <div id="ssOrModelList" class="or-model-list"></div>
+                  </div>
+                </div>
+              </div>
+              <div class="form-group">
+                <label>Reasoning</label>
+                <div class="reasoning-selector" id="ssReasoningSelector">
+                  <button class="reasoning-btn" data-value="none">None</button>
+                  <button class="reasoning-btn" data-value="low">Low</button>
+                  <button class="reasoning-btn active" data-value="medium">Medium</button>
+                  <button class="reasoning-btn" data-value="high">High</button>
+                </div>
+              </div>
+            </div>
+            <div class="form-group">
+              <div class="cs-instructions-label-row">
+                <label>Instructions to AI
+                  <span class="form-hint">Customize what JSON skill the AI generates.</span>
+                </label>
+                <button id="btnResetSsInstructions" class="btn btn-ghost btn-xs">Reset to default</button>
+              </div>
+              <textarea id="ssInstructions" class="form-input cs-instructions-textarea" rows="8" spellcheck="false"></textarea>
+            </div>
+            <div class="cs-ai-actions">
+              <button id="btnGenerateScriptAI" class="btn btn-primary">
+                <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M13 2L3 14h9l-1 8 10-12h-9l1-8z"/></svg>
+                Generate Script Skill
+              </button>
+              <span id="generateScriptStatus" class="generate-skill-status"></span>
+            </div>
+          </div>
+        </div>
+
+        <!-- JSON editor + live diagram preview -->
+        <div class="ss-editor-row">
+          <div class="form-group ss-json-col">
+            <label>Skill JSON</label>
+            <textarea id="ssJsonEditor" class="form-input skill-textarea" rows="20" spellcheck="false"
+              placeholder='Paste or generate JSON skill script...'></textarea>
+            <div class="ss-json-errors" id="ssJsonErrors"></div>
+          </div>
+          <div class="ss-diagram-col">
+            <label>Diagram Preview</label>
+            <div id="ssDiagramPreview" class="ss-diagram-preview"></div>
+          </div>
+        </div>
+      </div>
+      <div class="modal-footer">
+        <button class="btn btn-ghost" id="btnCancelCreateScript">Cancel</button>
+        <button class="btn btn-primary" id="btnSaveCreateScript">Save Script Skill</button>
+      </div>
+    </div>
+  </div>
+
+  <!-- ====== RUN SKILL SCRIPT MODAL ====== -->
+  <div id="runSkillModal" class="modal-overlay">
+    <div class="modal" style="max-width:540px">
+      <div class="modal-header">
+        <h2 id="runSkillTitle">Run Skill</h2>
+        <button class="modal-close" id="btnCloseRunSkill">&times;</button>
+      </div>
+      <div class="modal-body">
+        <!-- Model selection for AI steps -->
+        <div class="run-skill-model-section">
+          <label class="form-label" style="margin-bottom:6px;font-weight:600">Model <span class="form-hint">(used for AI steps)</span></label>
+          <div class="cs-ai-model-row">
+            <div class="form-group">
+              <div class="provider-tabs" id="rsProviderTabs">
+                <button class="provider-tab active" data-provider="ollama">Ollama</button>
+                <button class="provider-tab" data-provider="openrouter">OpenRouter</button>
+              </div>
+            </div>
+            <div class="form-group">
+              <select id="rsModelSelect" class="form-select"></select>
+              <div id="rsOrModelPicker" class="or-model-picker" style="display:none">
+                <div class="or-model-trigger" id="rsOrModelTrigger" tabindex="0">
+                  <span id="rsOrModelLabel">Select a model…</span>
+                  <svg width="10" height="6" viewBox="0 0 10 6" fill="none"><path d="M1 1l4 4 4-4" stroke="currentColor" stroke-width="1.5" stroke-linecap="round"/></svg>
+                </div>
+                <div class="or-model-dropdown" id="rsOrModelDropdown">
+                  <div class="or-model-search-wrap">
+                    <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round"><circle cx="11" cy="11" r="8"/><path d="M21 21l-4.35-4.35"/></svg>
+                    <input type="text" id="rsOrModelSearch" placeholder="Search models…" autocomplete="off" spellcheck="false">
+                  </div>
+                  <div id="rsOrModelList" class="or-model-list"></div>
+                </div>
+              </div>
+            </div>
+            <div class="form-group">
+              <div class="reasoning-selector" id="rsReasoningSelector">
+                <button class="reasoning-btn active" data-value="low">Low</button>
+                <button class="reasoning-btn" data-value="medium">Med</button>
+                <button class="reasoning-btn" data-value="high">High</button>
+              </div>
+            </div>
+          </div>
+        </div>
+
+        <div id="runSkillInputs"></div>
+        <div id="runSkillDiagram" class="ss-diagram-preview" style="max-height:300px;overflow:auto;margin-top:12px"></div>
+      </div>
+      <div class="modal-footer">
+        <button class="btn btn-ghost" id="btnCancelRunSkill">Cancel</button>
+        <button class="btn btn-primary" id="btnConfirmRunSkill">Run</button>
+      </div>
+    </div>
+  </div>
+
+  <script type="module" src="dashboard.js"></script>
 </body>
 </html>

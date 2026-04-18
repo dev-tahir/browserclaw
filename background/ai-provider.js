@@ -36,7 +36,7 @@ export class AIProvider {
       const data = await res.json();
       return data.models || [];
     } catch (err) {
-      console.error('Failed to fetch Ollama models:', err);
+      console.warn('Ollama not reachable (is it running?):', err.message);
       return [];
     }
   }
@@ -489,7 +489,11 @@ export class AIProvider {
         return {
           role: 'assistant',
           content: msg.content || '',
-          tool_calls: msg.tool_calls
+          tool_calls: msg.tool_calls.map(tc => ({
+            id: tc.id,
+            type: 'function',
+            function: tc.function
+          }))
         };
       }
       return { role: msg.role, content: msg.content || '' };

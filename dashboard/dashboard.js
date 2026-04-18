@@ -6,7 +6,6 @@
   let currentView = 'grid'; // 'grid' | 'detail'
   let currentTaskId = null;
   let currentFilter = 'all';
-  let selectedProvider = 'ollama';
   let agents = [];
   let dashboardPort = null;
   let taskPort = null;
@@ -14,14 +13,6 @@
   let streamingThinking = '';
   let isStreaming = false;
   let pendingImages = []; // { dataUrl, name } — images to attach to the next sent message
-
-  // OpenRouter model picker state
-  let orAllModels = [];       // full model list fetched from backend
-  let orSelectedModel = '';   // currently chosen model id
-  let orPickerOpen = false;
-
-  // Reasoning effort (matches the active .reasoning-btn)
-  let selectedReasoningEffort = 'low';
 
   // Skills
   let skills = [];           // all loaded skills (from service worker)
@@ -39,7 +30,263 @@
   const chatInput = $('#chatInput');
   const newTaskModal = $('#newTaskModal');
   const settingsModal = $('#settingsModal');
-  const modelSelect = $('#modelSelect');
+
+  // ============ MODEL PICKER CONTROLLER (shared by New Task & Create Skill) ============
+
+  class ModelPickerController {
+    constructor(opts) {
+      this.providerTabsEl = $(opts.providerTabs);
+      this.modelSelectEl = $(opts.modelSelect);
+      this.orPickerEl = $(opts.orPicker);
+      this.orTriggerEl = $(opts.orTrigger);
+      this.orLabelEl = $(opts.orLabel);
+      this.orDropdownEl = $(opts.orDropdown);
+      this.orSearchEl = $(opts.orSearch);
+      this.orListEl = $(opts.orList);
+      this.reasoningSelectorEl = $(opts.reasoningSelector);
+
+      this.selectedProvider = 'ollama';
+      this.orAllModels = [];
+      this.orSelectedModel = '';
+      this.orPickerOpen = false;
+      this.selectedReasoningEffort = opts.defaultReasoning || 'low';
+
+      this._setupListeners();
+    }
+
+    _setupListeners() {
+      // Provider tabs
+      if (this.providerTabsEl) {
+        this.providerTabsEl.querySelectorAll('.provider-tab').forEach(tab => {
+          tab.addEventListener('click', () => {
+            this.providerTabsEl.querySelectorAll('.provider-tab').forEach(t => t.classList.remove('active'));
+            tab.classList.add('active');
+            this.selectedProvider = tab.dataset.provider;
+            this.loadModels();
+          });
+        });
+      }
+
+      // Reasoning buttons
+      if (this.reasoningSelectorEl) {
+        this.reasoningSelectorEl.querySelectorAll('.reasoning-btn').forEach(btn => {
+          btn.addEventListener('click', () => {
+            this.reasoningSelectorEl.querySelectorAll('.reasoning-btn').forEach(b => b.classList.remove('active'));
+            btn.classList.add('active');
+            this.selectedReasoningEffort = btn.dataset.value;
+          });
+        });
+      }
+
+      // OpenRouter picker
+      if (this.orTriggerEl) {
+        this.orTriggerEl.addEventListener('click', () => {
+          if (this.orPickerOpen) this._closeOrPicker(); else this._openOrPicker();
+        });
+        this.orTriggerEl.addEventListener('keydown', (e) => {
+          if (e.key === 'Enter' || e.key === ' ') { e.preventDefault(); this._openOrPicker(); }
+          if (e.key === 'Escape') this._closeOrPicker();
+        });
+      }
+      if (this.orSearchEl) {
+        this.orSearchEl.addEventListener('input', (e) => this._renderOrList(e.target.value));
+        this.orSearchEl.addEventListener('keydown', (e) => { if (e.key === 'Escape') this._closeOrPicker(); });
+      }
+      // Close on outside click
+      document.addEventListener('click', (e) => {
+        if (this.orPickerOpen && this.orPickerEl && !this.orPickerEl.contains(e.target)) {
+          this._closeOrPicker();
+        }
+      });
+    }
+
+    setProvider(provider) {
+      this.selectedProvider = provider;
+      if (this.providerTabsEl) {
+        this.providerTabsEl.querySelectorAll('.provider-tab').forEach(t => {
+          t.classList.toggle('active', t.dataset.provider === provider);
+        });
+      }
+    }
+
+    getModel() {
+      return this.selectedProvider === 'openrouter' ? this.orSelectedModel : this.modelSelectEl?.value || '';
+    }
+
+    getProvider() {
+      return this.selectedProvider;
+    }
+
+    getReasoning() {
+      return this.selectedReasoningEffort;
+    }
+
+    async loadModels() {
+      const isOR = this.selectedProvider === 'openrouter';
+      if (this.modelSelectEl) this.modelSelectEl.style.display = isOR ? 'none' : '';
+      if (this.orPickerEl) this.orPickerEl.style.display = isOR ? '' : 'none';
+
+      if (!isOR) {
+        if (this.modelSelectEl) this.modelSelectEl.innerHTML = '<option value="">Loading models…</option>';
+        const response = await chrome.runtime.sendMessage({ type: 'getOllamaModels' });
+        if (response?.success && response.models.length > 0 && this.modelSelectEl) {
+          this.modelSelectEl.innerHTML = '';
+          for (const model of response.models) {
+            const opt = document.createElement('option');
+            opt.value = model.name;
+            opt.textContent = `${model.name} (${formatBytes(model.size)})`;
+            this.modelSelectEl.appendChild(opt);
+          }
+        } else {
+          if (this.modelSelectEl) this.modelSelectEl.innerHTML = '<option value="">No models found – check Ollama</option>';
+        }
+      } else {
+        this._setOrLabel('Loading models…');
+        const response = await chrome.runtime.sendMessage({ type: 'getOpenRouterModels' });
+        if (response?.success && response.models.length > 0) {
+          this.orAllModels = response.models;
+          this.orSelectedModel = '';
+          this._setOrLabel('Select a model…');
+          this._renderOrList('');
+        } else {
+          this.orAllModels = [];
+          this._setOrLabel('No models found – check API key');
+        }
+      }
+    }
+
+    _setOrLabel(text) {
+      if (this.orLabelEl) this.orLabelEl.textContent = text;
+    }
+
+    _openOrPicker() {
+      this.orPickerOpen = true;
+      if (this.orDropdownEl) this.orDropdownEl.classList.add('open');
+      if (this.orSearchEl) { this.orSearchEl.value = ''; this.orSearchEl.focus(); }
+      this._renderOrList('');
+    }
+
+    _closeOrPicker() {
+      this.orPickerOpen = false;
+      if (this.orDropdownEl) this.orDropdownEl.classList.remove('open');
+    }
+
+    async _renderOrList(query) {
+      if (!this.orListEl) return;
+      this.orListEl.innerHTML = '';
+      const q = query.toLowerCase().trim();
+      const counts = await getModelUsageCounts();
+
+      const favIds = Object.entries(counts)
+        .sort((a, b) => b[1] - a[1])
+        .map(([id]) => id)
+        .filter(id => this.orAllModels.some(m => m.name === id))
+        .slice(0, 5);
+
+      const filtered = this.orAllModels.filter(m =>
+        !q || m.name.toLowerCase().includes(q) || (m.displayName || '').toLowerCase().includes(q)
+      );
+
+      if (!q && favIds.length > 0) {
+        const header = document.createElement('div');
+        header.className = 'or-model-group-header';
+        header.textContent = '★ Favourites';
+        this.orListEl.appendChild(header);
+        for (const id of favIds) {
+          const m = this.orAllModels.find(x => x.name === id);
+          if (m) this.orListEl.appendChild(this._buildOrOption(m, counts[id]));
+        }
+        if (filtered.length > 0) {
+          const sep = document.createElement('div');
+          sep.className = 'or-model-group-header';
+          sep.textContent = 'All Models';
+          this.orListEl.appendChild(sep);
+        }
+      }
+
+      if (filtered.length === 0) {
+        const empty = document.createElement('div');
+        empty.className = 'or-model-empty';
+        empty.textContent = 'No models match your search';
+        this.orListEl.appendChild(empty);
+        return;
+      }
+
+      for (const m of filtered) {
+        this.orListEl.appendChild(this._buildOrOption(m, counts[m.name]));
+      }
+    }
+
+    _buildOrOption(model, usageCount) {
+      const item = document.createElement('div');
+      item.className = 'or-model-option' + (model.name === this.orSelectedModel ? ' selected' : '');
+      item.dataset.value = model.name;
+
+      const nameEl = document.createElement('div');
+      nameEl.className = 'or-model-name';
+      nameEl.textContent = model.displayName || model.name;
+
+      const metaEl = document.createElement('div');
+      metaEl.className = 'or-model-meta';
+
+      const idSpan = document.createElement('span');
+      idSpan.textContent = model.name;
+      metaEl.appendChild(idSpan);
+
+      if (model.pricing?.prompt) {
+        const priceSpan = document.createElement('span');
+        priceSpan.className = 'or-model-price';
+        const promptM = parseFloat(model.pricing.prompt) * 1_000_000;
+        priceSpan.textContent = `$${promptM.toFixed(2)}/M`;
+        metaEl.appendChild(priceSpan);
+      }
+
+      if (usageCount > 0) {
+        const useSpan = document.createElement('span');
+        useSpan.className = 'or-model-uses';
+        useSpan.textContent = `used ${usageCount}×`;
+        metaEl.appendChild(useSpan);
+      }
+
+      item.appendChild(nameEl);
+      item.appendChild(metaEl);
+
+      item.addEventListener('click', () => {
+        this.orSelectedModel = model.name;
+        this._setOrLabel(model.displayName || model.name);
+        this._closeOrPicker();
+      });
+
+      return item;
+    }
+  }
+
+  // Instantiate model pickers
+  const taskPicker = new ModelPickerController({
+    providerTabs: '.modal-col-left .provider-tabs',
+    modelSelect: '#modelSelect',
+    orPicker: '#orModelPicker',
+    orTrigger: '#orModelTrigger',
+    orLabel: '#orModelLabel',
+    orDropdown: '#orModelDropdown',
+    orSearch: '#orModelSearch',
+    orList: '#orModelList',
+    reasoningSelector: '#reasoningSelector',
+    defaultReasoning: 'low'
+  });
+
+  const skillPicker = new ModelPickerController({
+    providerTabs: '#csProviderTabs',
+    modelSelect: '#csModelSelect',
+    orPicker: '#csOrModelPicker',
+    orTrigger: '#csOrModelTrigger',
+    orLabel: '#csOrModelLabel',
+    orDropdown: '#csOrModelDropdown',
+    orSearch: '#csOrModelSearch',
+    orList: '#csOrModelList',
+    reasoningSelector: '#csReasoningSelector',
+    defaultReasoning: 'medium'
+  });
 
   // ============ INITIALIZATION ============
 
@@ -122,15 +369,7 @@
       }
     });
 
-    // Provider tabs
-    $$('.provider-tab').forEach(tab => {
-      tab.addEventListener('click', () => {
-        $$('.provider-tab').forEach(t => t.classList.remove('active'));
-        tab.classList.add('active');
-        selectedProvider = tab.dataset.provider;
-        loadModels();
-      });
-    });
+    // Provider tabs — handled by ModelPickerController instances
 
     // Filter buttons
     $$('.filter-btn').forEach(btn => {
@@ -142,20 +381,8 @@
       });
     });
 
-    // Refresh models
-    $('#btnRefreshModels').addEventListener('click', loadModels);
-
-    // Reasoning effort selector
-    $$('#reasoningSelector .reasoning-btn').forEach(btn => {
-      btn.addEventListener('click', () => {
-        $$('#reasoningSelector .reasoning-btn').forEach(b => b.classList.remove('active'));
-        btn.classList.add('active');
-        selectedReasoningEffort = btn.dataset.value;
-      });
-    });
-
-    // Setup OpenRouter custom model picker
-    setupOrPickerListeners();
+    // Refresh models (uses taskPicker)
+    $('#btnRefreshModels').addEventListener('click', () => taskPicker.loadModels());
 
     // Skills row
     $('#btnAddSkill').addEventListener('click', () => openCreateSkillModal(null));
@@ -171,7 +398,24 @@
     $('#btnCloseCreateSkill').addEventListener('click', closeCreateSkillModal);
     $('#btnCancelCreateSkill').addEventListener('click', closeCreateSkillModal);
     $('#btnSaveCreateSkill').addEventListener('click', saveNewSkill);
-    $('#btnGenerateSkill').addEventListener('click', generateSkillFromConversation);
+    $('#btnGenerateSkillAI').addEventListener('click', generateSkillWithAI);
+    $('#btnResetCsInstructions').addEventListener('click', () => loadDefaultSkillInstructions(true));
+    $('#csAiToggle').addEventListener('click', toggleCsAiSection);
+
+    // Script skill modal
+    $('#btnAddScriptSkill').addEventListener('click', () => openCreateScriptSkillModal(null));
+    $('#btnCloseCreateScript').addEventListener('click', closeCreateScriptSkillModal);
+    $('#btnCancelCreateScript').addEventListener('click', closeCreateScriptSkillModal);
+    $('#btnSaveCreateScript').addEventListener('click', saveNewScriptSkill);
+    $('#btnGenerateScriptAI').addEventListener('click', generateScriptSkillWithAI);
+    $('#btnResetSsInstructions').addEventListener('click', () => loadScriptSkillInstructions(true));
+    $('#ssAiToggle').addEventListener('click', toggleSsAiSection);
+    $('#ssJsonEditor').addEventListener('input', debounce(previewScriptSkillDiagram, 500));
+
+    // Run skill modal
+    $('#btnCloseRunSkill').addEventListener('click', closeRunSkillModal);
+    $('#btnCancelRunSkill').addEventListener('click', closeRunSkillModal);
+    $('#btnConfirmRunSkill').addEventListener('click', confirmRunSkill);
 
     // Skill auto-mode toggle in new task modal
     $('#skillAutoMode').addEventListener('change', () => {
@@ -180,8 +424,8 @@
       $('.skill-auto-hint').style.display = manual ? 'none' : '';
     });
 
-    // Save as skill (task detail header)
-    $('#btnSaveAsSkill').addEventListener('click', () => openCreateSkillModal(currentTaskId));
+    // Save as skill (task detail header) — opens JSON script skill modal with conversation context
+    $('#btnSaveAsSkill').addEventListener('click', () => openCreateScriptSkillModal(currentTaskId));
 
     // Close modals on overlay click — newTaskModal excluded (X button / Cancel only)
     settingsModal.addEventListener('click', (e) => {
@@ -190,9 +434,7 @@
     $('#skillModal').addEventListener('click', (e) => {
       if (e.target === $('#skillModal')) closeSkillModal();
     });
-    $('#createSkillModal').addEventListener('click', (e) => {
-      if (e.target === $('#createSkillModal')) closeCreateSkillModal();
-    });
+    // Create Skill modal intentionally does NOT close on outside click
   }
 
   // ============ DASHBOARD PORT (Real-time updates) ============
@@ -211,7 +453,36 @@
           break;
         case 'message':
           if (msg.taskId === currentTaskId && currentView === 'detail') {
-            appendChatMessage(msg.message);
+            const liveContainer = chatMessages.querySelector('.live-tool-container');
+            if (liveContainer && msg.message.tool_calls) {
+              // Tool calls are already live in the DOM with feedback —
+              // merge text/thinking into the container instead of duplicating
+              finishStreamingMessage();
+              let preHtml = '';
+              if (msg.message.thinking) {
+                preHtml += `<div class="thinking-inline"><span class="thinking-label">thinking:</span>${escapeHtml(msg.message.thinking)}</div>`;
+              }
+              if (msg.message.content) {
+                preHtml += renderMarkdown(msg.message.content);
+              }
+              if (preHtml) {
+                liveContainer.insertAdjacentHTML('afterbegin', preHtml);
+              }
+              liveContainer.classList.remove('live-tool-container');
+              // Token badge on last tci-row
+              if (msg.message.usage) {
+                const parts = [`↑${fmtTokens(msg.message.usage.prompt_tokens)} ↓${fmtTokens(msg.message.usage.completion_tokens)}`];
+                if (msg.message.usage.cost > 0) parts.push(`$${msg.message.usage.cost.toFixed(5)}`);
+                const badge = document.createElement('span');
+                badge.className = 'msg-token-badge';
+                badge.textContent = parts.join(' · ');
+                const rows = liveContainer.querySelectorAll('.tci-row');
+                const lastRow = rows[rows.length - 1];
+                (lastRow || liveContainer).appendChild(badge);
+              }
+            } else {
+              appendChatMessage(msg.message);
+            }
           }
           updateAgentInList(msg.taskId);
           break;
@@ -266,6 +537,16 @@
             updateTokenBar(msg.totals);
           }
           break;
+        case 'skill_script_start':
+          if (msg.taskId === currentTaskId && currentView === 'detail') {
+            appendSystemMessage(`Running skill script: **${msg.skill?.name}** (${msg.skill?.steps} steps)`, 'info');
+          }
+          break;
+        case 'skill_progress':
+          if (msg.taskId === currentTaskId && currentView === 'detail') {
+            handleSkillProgressEvent(msg.event);
+          }
+          break;
       }
     });
 
@@ -305,60 +586,16 @@
       $('#settOllamaUrl').value = s.ollamaBaseUrl;
       $('#settOpenRouterKey').value = s.openrouterApiKey;
       $('#settDefaultProvider').value = s.defaultProvider;
-      selectedProvider = s.defaultProvider;
 
-      // Set active provider tab
-      $$('.provider-tab').forEach(t => {
-        t.classList.toggle('active', t.dataset.provider === selectedProvider);
-      });
+      // Set both pickers to the default provider
+      taskPicker.setProvider(s.defaultProvider);
+      skillPicker.setProvider(s.defaultProvider);
 
-      await loadModels();
+      await taskPicker.loadModels();
     }
   }
 
-  async function loadModels() {
-    const isOR = selectedProvider === 'openrouter';
-
-    // Toggle which picker is visible
-    modelSelect.style.display = isOR ? 'none' : '';
-    $('#orModelPicker').style.display = isOR ? '' : 'none';
-
-    if (!isOR) {
-      // ---- Ollama: native <select> ----
-      modelSelect.innerHTML = '<option value="">Loading models…</option>';
-      const response = await chrome.runtime.sendMessage({ type: 'getOllamaModels' });
-      if (response?.success && response.models.length > 0) {
-        modelSelect.innerHTML = '';
-        for (const model of response.models) {
-          const opt = document.createElement('option');
-          opt.value = model.name;
-          opt.textContent = `${model.name} (${formatBytes(model.size)})`;
-          modelSelect.appendChild(opt);
-        }
-      } else {
-        modelSelect.innerHTML = '<option value="">No models found – check Ollama</option>';
-      }
-    } else {
-      // ---- OpenRouter: custom searchable picker ----
-      setOrLabel('Loading models…');
-      const response = await chrome.runtime.sendMessage({ type: 'getOpenRouterModels' });
-      if (response?.success && response.models.length > 0) {
-        orAllModels = response.models;
-        orSelectedModel = '';
-        setOrLabel('Select a model…');
-        renderOrList('');
-      } else {
-        orAllModels = [];
-        setOrLabel('No models found – check API key');
-      }
-    }
-  }
-
-  // ---- OpenRouter picker helpers ----
-
-  function setOrLabel(text) {
-    $('#orModelLabel').textContent = text;
-  }
+  // ---- Shared model usage helpers ----
 
   async function getModelUsageCounts() {
     const data = await chrome.storage.local.get('modelUsageCounts');
@@ -371,146 +608,11 @@
     await chrome.storage.local.set({ modelUsageCounts: counts });
   }
 
-  async function renderOrList(query) {
-    const listEl = $('#orModelList');
-    listEl.innerHTML = '';
-    const q = query.toLowerCase().trim();
-    const counts = await getModelUsageCounts();
-
-    // Favourites: top-5 most used OR models that exist in current list
-    const favIds = Object.entries(counts)
-      .sort((a, b) => b[1] - a[1])
-      .map(([id]) => id)
-      .filter(id => orAllModels.some(m => m.name === id))
-      .slice(0, 5);
-
-    const filtered = orAllModels.filter(m =>
-      !q || m.name.toLowerCase().includes(q) || (m.displayName || '').toLowerCase().includes(q)
-    );
-
-    // Show favourites section only when not searching and there are some
-    if (!q && favIds.length > 0) {
-      const header = document.createElement('div');
-      header.className = 'or-model-group-header';
-      header.textContent = '★ Favourites';
-      listEl.appendChild(header);
-
-      for (const id of favIds) {
-        const m = orAllModels.find(x => x.name === id);
-        if (m) listEl.appendChild(buildOrOption(m, counts[id]));
-      }
-
-      if (filtered.length > 0) {
-        const sep = document.createElement('div');
-        sep.className = 'or-model-group-header';
-        sep.textContent = 'All Models';
-        listEl.appendChild(sep);
-      }
-    }
-
-    if (filtered.length === 0) {
-      const empty = document.createElement('div');
-      empty.className = 'or-model-empty';
-      empty.textContent = 'No models match your search';
-      listEl.appendChild(empty);
-      return;
-    }
-
-    for (const m of filtered) {
-      listEl.appendChild(buildOrOption(m, counts[m.name]));
-    }
-  }
-
-  function buildOrOption(model, usageCount) {
-    const item = document.createElement('div');
-    item.className = 'or-model-option' + (model.name === orSelectedModel ? ' selected' : '');
-    item.dataset.value = model.name;
-
-    const nameEl = document.createElement('div');
-    nameEl.className = 'or-model-name';
-    nameEl.textContent = model.displayName || model.name;
-
-    const metaEl = document.createElement('div');
-    metaEl.className = 'or-model-meta';
-
-    const idSpan = document.createElement('span');
-    idSpan.textContent = model.name;
-
-    metaEl.appendChild(idSpan);
-
-    if (model.pricing?.prompt) {
-      const priceSpan = document.createElement('span');
-      priceSpan.className = 'or-model-price';
-      const promptM = parseFloat(model.pricing.prompt) * 1_000_000;
-      priceSpan.textContent = `$${promptM.toFixed(2)}/M`;
-      metaEl.appendChild(priceSpan);
-    }
-
-    if (usageCount > 0) {
-      const useSpan = document.createElement('span');
-      useSpan.className = 'or-model-uses';
-      useSpan.textContent = `used ${usageCount}×`;
-      metaEl.appendChild(useSpan);
-    }
-
-    item.appendChild(nameEl);
-    item.appendChild(metaEl);
-
-    item.addEventListener('click', () => {
-      orSelectedModel = model.name;
-      setOrLabel(model.displayName || model.name);
-      closeOrPicker();
-    });
-
-    return item;
-  }
-
-  function openOrPicker() {
-    orPickerOpen = true;
-    $('#orModelDropdown').classList.add('open');
-    const searchInput = $('#orModelSearch');
-    searchInput.value = '';
-    renderOrList('');
-    searchInput.focus();
-  }
-
-  function closeOrPicker() {
-    orPickerOpen = false;
-    $('#orModelDropdown').classList.remove('open');
-  }
-
-  function setupOrPickerListeners() {
-    // Toggle on trigger click
-    $('#orModelTrigger').addEventListener('click', () => {
-      if (orPickerOpen) closeOrPicker(); else openOrPicker();
-    });
-    $('#orModelTrigger').addEventListener('keydown', (e) => {
-      if (e.key === 'Enter' || e.key === ' ') { e.preventDefault(); openOrPicker(); }
-      if (e.key === 'Escape') closeOrPicker();
-    });
-
-    // Search input — filter list
-    $('#orModelSearch').addEventListener('input', (e) => {
-      renderOrList(e.target.value);
-    });
-    $('#orModelSearch').addEventListener('keydown', (e) => {
-      if (e.key === 'Escape') closeOrPicker();
-    });
-
-    // Close on outside click
-    document.addEventListener('click', (e) => {
-      if (orPickerOpen && !$('#orModelPicker').contains(e.target)) {
-        closeOrPicker();
-      }
-    });
-  }
-
   // ============ TASK MANAGEMENT ============
 
   async function createAndStartTask() {
     const name = $('#taskName').value.trim();
-    // Read model from the active picker
-    const model = selectedProvider === 'openrouter' ? orSelectedModel : modelSelect.value;
+    const model = taskPicker.getModel();
     const message = $('#taskMessage').value.trim();
 
     if (!name) { alert('Please enter a task name'); return; }
@@ -518,15 +620,15 @@
     if (!message) { alert('Please describe the task'); return; }
 
     // Track model usage for favourites
-    if (selectedProvider === 'openrouter') {
+    if (taskPicker.getProvider() === 'openrouter') {
       incrementModelUsage(model);
     }
 
     const config = {
       name,
-      provider: selectedProvider,
+      provider: taskPicker.getProvider(),
       model,
-      reasoningEffort: selectedReasoningEffort,
+      reasoningEffort: taskPicker.getReasoning(),
       permissions: {
         navigation: $('#permNavigation').checked,
         interaction: $('#permInteraction').checked,
@@ -846,7 +948,7 @@
       // Tool calls
       if (msg.tool_calls) {
         for (const tc of msg.tool_calls) {
-          const argsFormatted = formatToolArgs(tc.function.arguments);
+          const argsFormatted = _formatToolCallHeader(tc.function.name, tc.function.arguments);
           const screenshotSrc = msg.toolScreenshotData?.[tc.id];
           const hasOutput = !!screenshotSrc;
           const thumbHtml = screenshotSrc
@@ -879,32 +981,44 @@
   }
 
   function appendToolCall(toolCall) {
-    let argsStr = '';
-    try {
-      const args = JSON.parse(toolCall.function.arguments);
-      argsStr = JSON.stringify(args, null, 2);
-    } catch {
-      argsStr = toolCall.function.arguments;
+    const fnName = toolCall.function.name;
+    const argsFormatted = _formatToolCallHeader(fnName, toolCall.function.arguments);
+
+    // Group all live tool calls into a single assistant message container
+    let container = chatMessages.querySelector('.live-tool-container');
+    if (!container) {
+      container = document.createElement('div');
+      container.className = 'chat-message assistant live-tool-container';
+      chatMessages.appendChild(container);
     }
 
-    const wrapper = document.createElement('div');
-    wrapper.className = 'tool-call-standalone';
-    wrapper.innerHTML = `
-      <div class="tool-call" data-call-id="${toolCall.id}">
-        <div class="tool-call-summary">
-          <svg class="tool-call-icon" width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M14.7 6.3a1 1 0 000 1.4l1.6 1.6a1 1 0 001.4 0l3.77-3.77a6 6 0 01-7.94 7.94l-6.91 6.91a2.12 2.12 0 01-3-3l6.91-6.91a6 6 0 017.94-7.94l-3.76 3.76z"/></svg>
-          <span class="tool-call-name">${escapeHtml(toolCall.function.name)}</span>
-          <span class="tool-call-status" id="status-${toolCall.id}">executing…</span>
-          <svg class="tool-call-chevron" width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5"><path d="M9 18l6-6-6-6"/></svg>
-        </div>
-        <div class="tool-call-details">
-          <div class="tool-call-args">${escapeHtml(argsStr)}</div>
-          <div class="tool-result" id="result-${toolCall.id}">⏳ Executing...</div>
-        </div>
-      </div>
-    `;
-    chatMessages.appendChild(wrapper);
+    container.insertAdjacentHTML('beforeend',
+      `<div class="tci-wrap" data-call-id="${toolCall.id}">` +
+      `<div class="tci-row">` +
+        `<span class="tci-exec-icon"></span>` +
+        `<span class="tci-name">${escapeHtml(fnName)}</span>` +
+        `<span class="tci-status">executing…</span>` +
+        `<span class="tci-args">${escapeHtml(argsFormatted)}</span>` +
+      `</div>` +
+      `<div class="tci-body"></div>` +
+    `</div>`);
     scrollChatToBottom();
+  }
+
+  /** Build a readable one-line summary for tool call args */
+  function _formatToolCallHeader(fnName, rawArgs) {
+    let args;
+    try { args = typeof rawArgs === 'string' ? JSON.parse(rawArgs) : rawArgs; } catch { return String(rawArgs || ''); }
+    if (!args || typeof args !== 'object') return '';
+
+    if (fnName === 'execute_steps' && args.plan) {
+      const sections = args.plan;
+      const totalSteps = sections.reduce((n, s) => n + (s.steps?.length || 0), 0);
+      const names = sections.map(s => s.section).join(' → ');
+      return `${sections.length} section${sections.length > 1 ? 's' : ''}, ${totalSteps} steps: ${names}`;
+    }
+
+    return formatToolArgs(rawArgs);
   }
 
   function updateToolCallStatus(callId, status, tool, args) {
@@ -915,6 +1029,21 @@
     const isSuccess = result.success !== false;
     const wrap = chatMessages.querySelector(`.tci-wrap[data-call-id="${callId}"]`);
     if (!wrap) return;
+
+    // Remove executing indicator, show result status
+    const statusEl = wrap.querySelector('.tci-status');
+    if (statusEl) {
+      statusEl.textContent = isSuccess ? '' : 'failed';
+      statusEl.className = 'tci-status' + (isSuccess ? '' : ' error');
+    }
+    const execIcon = wrap.querySelector('.tci-exec-icon');
+    if (execIcon) execIcon.remove();
+
+    // Add result token badge
+    const nameEl = wrap.querySelector('.tci-name');
+    if (nameEl && isSuccess) {
+      nameEl.classList.add('done');
+    }
 
     const body = wrap.querySelector('.tci-body');
     const row = wrap.querySelector('.tci-row');
@@ -946,7 +1075,21 @@
         for (const step of section.steps) {
           const stepEl = document.createElement('div');
           stepEl.className = `plan-step ${step.success ? 'done' : 'failed'}`;
-          stepEl.textContent = `${step.success ? '✓' : '✗'} ${step.tool}${step.message ? ' — ' + step.message : ''}`;
+          let stepText = `${step.success ? '✓' : '✗'} ${step.tool}${step.message ? ' — ' + step.message : ''}`;
+          stepEl.textContent = stepText;
+
+          // Show page changes inline
+          if (step.pageChanges) {
+            const changesEl = _renderPageChanges(step.pageChanges);
+            stepEl.appendChild(changesEl);
+          }
+
+          // Show verification results
+          if (step.verify && step.verify.results) {
+            const verifyEl = _renderVerifyResults(step.verify);
+            stepEl.appendChild(verifyEl);
+          }
+
           stepsEl.appendChild(stepEl);
         }
         secEl.appendChild(stepsEl);
@@ -967,16 +1110,85 @@
       }
       body.appendChild(planEl);
       wrap.classList.add('has-output');
-    } else if (result.message || !isSuccess) {
-      const text = isSuccess ? result.message : (result.error || 'Failed');
-      const textEl = document.createElement('div');
-      textEl.className = `tci-body-text${isSuccess ? '' : ' error'}`;
-      textEl.textContent = text;
-      body.appendChild(textEl);
-      wrap.classList.add('has-output');
+    } else {
+      // Text-based result display
+      if (result.message || !isSuccess) {
+        const text = isSuccess ? result.message : (result.error || 'Failed');
+        const textEl = document.createElement('div');
+        textEl.className = `tci-body-text${isSuccess ? '' : ' error'}`;
+        textEl.textContent = text;
+        body.appendChild(textEl);
+        wrap.classList.add('has-output');
+      }
+
+      // Show extract_content / extract_all_text results
+      if (tool === 'extract_content' && result.content) {
+        const contentEl = document.createElement('div');
+        contentEl.className = 'tci-body-text tci-content-preview';
+        const preview = result.content.length > 500 ? result.content.substring(0, 500) + '…' : result.content;
+        contentEl.textContent = preview;
+        body.appendChild(contentEl);
+        wrap.classList.add('has-output');
+      } else if (tool === 'extract_all_text' && result.text) {
+        const textEl = document.createElement('div');
+        textEl.className = 'tci-body-text tci-content-preview';
+        const preview = result.text.length > 500 ? result.text.substring(0, 500) + '…' : result.text;
+        textEl.textContent = preview;
+        body.appendChild(textEl);
+        wrap.classList.add('has-output');
+      }
+
+      // Show page changes for any action tool
+      if (result.pageChanges) {
+        const changesEl = _renderPageChanges(result.pageChanges);
+        body.appendChild(changesEl);
+        wrap.classList.add('has-output');
+      }
     }
 
     scrollChatToBottom();
+  }
+
+  function _renderPageChanges(changes) {
+    const el = document.createElement('div');
+    el.className = 'page-changes';
+    let html = '';
+    if (changes.url) {
+      html += `<div class="pc-row pc-url"><span class="pc-label">URL:</span> <span class="pc-from">${escapeHtml(changes.url.from)}</span> → <span class="pc-to">${escapeHtml(changes.url.to)}</span></div>`;
+    }
+    if (changes.title) {
+      html += `<div class="pc-row pc-title"><span class="pc-label">Title:</span> <span class="pc-from">${escapeHtml(changes.title.from)}</span> → <span class="pc-to">${escapeHtml(changes.title.to)}</span></div>`;
+    }
+    if (changes.appeared && changes.appeared.length) {
+      for (const item of changes.appeared) {
+        const desc = item.text ? `${item.tag} — "${escapeHtml(item.text.substring(0, 60))}"` : item.tag;
+        html += `<div class="pc-row pc-appeared"><span class="pc-badge pc-badge-new">+ appeared</span> <code>${escapeHtml(item.selector)}</code> <span class="pc-desc">${desc}</span></div>`;
+      }
+    }
+    if (changes.disappeared && changes.disappeared.length) {
+      for (const item of changes.disappeared) {
+        const desc = item.text ? `${item.tag} — "${escapeHtml(item.text.substring(0, 60))}"` : item.tag;
+        html += `<div class="pc-row pc-disappeared"><span class="pc-badge pc-badge-gone">− disappeared</span> <code>${escapeHtml(item.selector)}</code> <span class="pc-desc">${desc}</span></div>`;
+      }
+    }
+    el.innerHTML = html;
+    return el;
+  }
+
+  function _renderVerifyResults(verify) {
+    const el = document.createElement('div');
+    el.className = 'verify-results';
+    let html = '';
+    for (const r of (verify.results || [])) {
+      const icon = r.passed ? '✓' : '✗';
+      const cls = r.passed ? 'pass' : 'fail';
+      let detail = r.check;
+      if (r.expected) detail += ` = "${escapeHtml(r.expected)}"`;
+      if (!r.passed && r.actual) detail += ` (got "${escapeHtml(r.actual.substring(0, 80))}")`;
+      html += `<div class="vr-row vr-${cls}"><span class="vr-icon">${icon}</span> ${detail}</div>`;
+    }
+    el.innerHTML = html;
+    return el;
   }
 
   // ============ PLAN PROGRESS (live updates for execute_steps) ============
@@ -1178,7 +1390,7 @@
     $('#skillCheckboxes').classList.remove('visible');
     $('.skill-auto-hint').style.display = '';
     renderSkillCheckboxes();
-    loadModels();
+    taskPicker.loadModels();
     $('#taskName').focus();
   }
 
@@ -1307,23 +1519,28 @@
 
   // ============ SKILLS ============
 
+  let scriptSkills = [];
+
   async function loadSkills() {
     const res = await chrome.runtime.sendMessage({ type: 'getSkills' });
     if (res?.success) {
       skills = res.skills || [];
-      renderSkillsRow();
     }
+    const ssRes = await chrome.runtime.sendMessage({ type: 'getScriptSkills' });
+    scriptSkills = ssRes?.success ? (ssRes.skills || []) : [];
+    renderSkillsRow();
   }
 
   function renderSkillsRow() {
     const container = $('#skillsContainer');
     container.innerHTML = '';
 
-    if (skills.length === 0) {
+    if (skills.length === 0 && scriptSkills.length === 0) {
       container.innerHTML = '<div class="skills-empty">No skills yet — add one to give agents domain knowledge.</div>';
       return;
     }
 
+    // Prompt-based (.txt) skills
     for (const skill of skills) {
       const card = document.createElement('div');
       card.className = 'skill-card';
@@ -1357,16 +1574,65 @@
       card.appendChild(actions);
       container.appendChild(card);
     }
+
+    // Script (.json) skills
+    for (const ss of scriptSkills) {
+      const card = document.createElement('div');
+      card.className = 'skill-card skill-card-script';
+
+      const info = document.createElement('div');
+      info.className = 'skill-card-info';
+      info.innerHTML = `
+        <div class="skill-card-name">${escapeHtml(ss.name || ss._id)}</div>
+        <span class="skill-type-chip">script</span>
+        <span class="skill-summary-chip">${escapeHtml(ss._summary || '')}</span>
+      `;
+
+      const actions = document.createElement('div');
+      actions.className = 'skill-card-actions';
+
+      const runBtn = document.createElement('button');
+      runBtn.className = 'skill-card-btn run';
+      runBtn.textContent = 'Run';
+      runBtn.addEventListener('click', () => openRunSkillModal(ss._id));
+      actions.appendChild(runBtn);
+
+      const editBtn = document.createElement('button');
+      editBtn.className = 'skill-card-btn';
+      editBtn.textContent = 'Edit';
+      editBtn.addEventListener('click', () => openEditScriptSkillModal(ss._id));
+      actions.appendChild(editBtn);
+
+      const delBtn = document.createElement('button');
+      delBtn.className = 'skill-card-btn delete';
+      delBtn.textContent = 'Delete';
+      delBtn.addEventListener('click', async (e) => {
+        e.stopPropagation();
+        if (confirm(`Delete script skill "${ss.name || ss._id}"?`)) {
+          await chrome.runtime.sendMessage({ type: 'deleteScriptSkill', id: ss._id });
+          await loadSkills();
+        }
+      });
+      actions.appendChild(delBtn);
+
+      card.appendChild(info);
+      card.appendChild(actions);
+      container.appendChild(card);
+    }
   }
 
   function renderSkillCheckboxes() {
     const container = $('#skillCheckboxes');
     container.innerHTML = '';
-    if (skills.length === 0) {
+    const allItems = [
+      ...skills.map(s => ({ id: s.id, name: s.name, domain: s.domain, type: 'txt' })),
+      ...scriptSkills.map(s => ({ id: s._id, name: s.name || s._id, domain: '', type: 'json' })),
+    ];
+    if (allItems.length === 0) {
       container.innerHTML = '<div style="font-size:11px;color:var(--text-muted);padding:4px 0">No skills available.</div>';
       return;
     }
-    for (const skill of skills) {
+    for (const skill of allItems) {
       const label = document.createElement('label');
       label.className = 'skill-checkbox-item';
 
@@ -1386,6 +1652,12 @@
         domainSpan.className = 'skill-checkbox-domain';
         domainSpan.textContent = skill.domain;
         label.appendChild(domainSpan);
+      }
+      if (skill.type === 'json') {
+        const chip = document.createElement('span');
+        chip.className = 'skill-type-chip';
+        chip.textContent = 'script';
+        label.appendChild(chip);
       }
 
       container.appendChild(label);
@@ -1465,6 +1737,154 @@
 
   // ── Create skill modal ────────────────────────────────────────────────────
 
+  // Default instructions template (cached after first fetch)
+  let cachedToolsInfo = null;
+  let defaultSkillInstructions = '';
+
+  function buildDefaultSkillInstructions(toolsInfo) {
+    return `You are an expert browser automation skill creator.
+
+Your job is to create a skill file that is essentially a PROGRAMMATIC SEQUENCE OF TOOL CALLS — the same tools the agent uses at runtime. A skill is a pre-planned, deterministic multi-tool-call recipe. The agent should be able to follow it step-by-step with minimal reasoning or improvisation.
+
+CORE PRINCIPLE: A skill = a series of tool calls with exact parameters, written out so the agent can execute them nearly verbatim.
+
+Each step in the skill body should map directly to one tool call. Write them like this:
+
+  Step 1: navigate({ url: "https://example.com/login" })
+  Step 2: wait_for_element({ selector: "#username", timeout: 5000 })
+  Step 3: type_text({ selector: "#username", text: "{{username}}" })
+  Step 4: type_text({ selector: "#password", text: "{{password}}" })
+  Step 5: click({ selector: "#login-btn" })
+  Step 6: wait_for_element({ selector: ".dashboard", timeout: 10000 })
+
+Use {{placeholder}} for dynamic values the agent fills at runtime.
+
+Include:
+- Exact CSS selectors (be specific: prefer [data-testid], #id, or unique class paths)
+- Exact tool name and parameters for each step
+- wait / wait_for_element calls between steps that need them
+- Conditional notes only where truly needed (e.g., "If element not found, try fallback selector X")
+- Known gotchas: cookie banners, redirects, dynamic IDs, SPAs that need waits
+
+Do NOT include vague instructions like "find the button and click it". Every step must name the tool and its arguments.
+
+The output format:
+name: Skill Name
+domain: example.com
+description: Brief description
+version: 1.0
+---
+(Numbered tool-call steps below. One tool call per step. Use exact selectors and parameters.)
+
+=== AVAILABLE TOOLS (use these exact names and parameters) ===
+${toolsInfo}
+
+=== END TOOLS ===
+
+Generate the skill file based on the user's description. If conversation context is provided, extract the exact selectors and tool calls that worked.`;
+  }
+
+  function buildScriptSkillInstructions(toolsInfo) {
+    return `You are an expert browser automation skill-script creator.
+
+Your job: create a JSON skill script that automates browser tasks. Action steps execute directly (no AI cost). AI steps get full browser control and can click, type, navigate — like a real user.
+
+=== OUTPUT FORMAT ===
+Output ONLY valid JSON (no markdown fences, no explanation). The JSON must follow this structure:
+{
+  "name": "Skill Name",
+  "description": "What this skill does",
+  "inputs": [
+    { "id": "paramName", "type": "text|url|number|select", "label": "User-facing label", "required": true }
+  ],
+  "steps": [ ... ]
+}
+
+=== STEP TYPES ===
+1. "action" — Direct tool call, NO AI. Fields: id, type, label, tool, args
+   - args can use {{input.X}} for user inputs and {{var.X}} for variables from previous steps
+   - Cheapest step type — use for deterministic operations
+
+2. "ai" — AI agent with full browser tool access + screenshot. Fields: id, type, label, prompt, saveAs
+   - The AI sees a screenshot of the current page and can call ANY browser tool (click, type, navigate, etc.)
+   - It runs a mini agent loop: think → use tools → think → finish with a text response
+   - The final text response is saved to {{var.saveAs}}
+   - Use for: interacting with complex/dynamic UIs, reading page content, adaptive workflows
+
+3. "condition" — Deterministic branching. Fields: id, type, label, check, variable, value?, selector?, onTrue, onFalse
+   - check types: "variable_not_empty", "variable_equals", "variable_contains", "url_contains", "element_exists"
+   - onTrue/onFalse: "next" (continue), "end" (finish), "fail" (abort), or a step ID to jump to
+
+=== KEY RULES ===
+
+**Prefer URL navigation over form filling:**
+- GOOD: navigate to "https://www.google.com/search?q=my+query&tbm=nws"
+- BAD: navigate to google.com → find search box → type query → press enter
+- GOOD: navigate to "https://x.com/compose/post"  
+- BAD: navigate to x.com → find compose button → click it
+- Apply this to Google, YouTube, Amazon, X/Twitter, Reddit, etc.
+
+**Use AI steps for complex/dynamic interactions:**
+- Sites like X/Twitter, Instagram etc. change their DOM frequently — don't hardcode selectors
+- Instead, use an AI step: it sees the screenshot and uses tools to interact adaptively
+- Example: composing and posting a tweet should be ONE ai step, not multiple action steps with fragile selectors
+
+**Use action steps for simple deterministic operations:**
+- Navigation to URLs, waiting, pressing keys, simple clicks on stable selectors
+- JavaScript execution for reliable DOM operations
+
+**Template variables:**
+- {{input.X}} for user-provided inputs
+- {{var.X}} for values saved by previous AI steps (saveAs)
+
+**Error resilience:**
+- Prefer fewer, smarter steps over many fragile ones
+- Combine related interactions into a single AI step when selectors are unstable
+- Add wait steps (2-4 seconds) after navigation for page rendering
+
+=== EXAMPLE: Search and Post ===
+{
+  "name": "Search and Post to X",
+  "description": "Search Google and post results to X",
+  "inputs": [{ "id": "query", "type": "text", "label": "Search query", "required": true }],
+  "steps": [
+    { "id": "search", "type": "action", "label": "Google search", "tool": "navigate", "args": { "url": "https://www.google.com/search?q={{input.query}}" } },
+    { "id": "wait", "type": "action", "label": "Wait for results", "tool": "wait", "args": { "seconds": 3 } },
+    { "id": "extract", "type": "ai", "label": "Extract results", "prompt": "Extract the top 3 search result titles and URLs. Return a brief summary.", "saveAs": "results" },
+    { "id": "goto_x", "type": "action", "label": "Open X", "tool": "navigate", "args": { "url": "https://x.com" } },
+    { "id": "wait_x", "type": "action", "label": "Wait for X", "tool": "wait", "args": { "seconds": 3 } },
+    { "id": "post", "type": "ai", "label": "Compose and post", "prompt": "Post a tweet with this content: {{var.results}}. Click the compose area, type the tweet, and click Post.", "saveAs": "postResult" }
+  ]
+}
+
+=== AVAILABLE TOOLS ===
+${toolsInfo}
+
+=== END ===
+
+Generate ONLY the JSON. Extract tool calls, selectors, and patterns from the conversation when available.`;
+  }
+
+  async function loadDefaultSkillInstructions(force) {
+    if (!cachedToolsInfo || force) {
+      const res = await chrome.runtime.sendMessage({ type: 'getToolsInfo' });
+      cachedToolsInfo = res?.success ? res.toolsInfo : '(Failed to load tools)';
+    }
+    defaultSkillInstructions = buildDefaultSkillInstructions(cachedToolsInfo);
+    $('#csInstructions').value = defaultSkillInstructions;
+  }
+
+  function toggleCsAiSection() {
+    const body = $('#csAiBody');
+    const chevron = $('#csAiToggle').querySelector('.cs-ai-chevron');
+    const isOpen = body.classList.toggle('open');
+    chevron.classList.toggle('open', isOpen);
+    if (isOpen && !$('#csInstructions').value) {
+      loadDefaultSkillInstructions(false);
+      skillPicker.loadModels();
+    }
+  }
+
   function openCreateSkillModal(taskId) {
     $('#newSkillName').value = '';
     $('#newSkillDomain').value = '';
@@ -1472,16 +1892,18 @@
     $('#newSkillContent').value = '';
     $('#generateSkillStatus').textContent = '';
 
+    // Reset AI section to collapsed
+    $('#csAiBody').classList.remove('open');
+    $('#csAiToggle').querySelector('.cs-ai-chevron').classList.remove('open');
+
     // Pre-fill name from task if available
     if (taskId) {
       const agent = agents.find(a => a.id === taskId);
       if (agent) $('#newSkillName').value = agent.name;
     }
 
-    // Show generate button only when opened from a task detail
-    const generateBtn = $('#btnGenerateSkill');
-    generateBtn.style.display = taskId ? '' : 'none';
-    generateBtn.dataset.taskId = taskId || '';
+    // Store taskId so AI generation can include conversation context
+    $('#btnGenerateSkillAI').dataset.taskId = taskId || '';
 
     $('#createSkillModal').classList.add('active');
     $('#newSkillName').focus();
@@ -1518,42 +1940,470 @@
     }
   }
 
-  async function generateSkillFromConversation() {
-    const taskId = $('#btnGenerateSkill').dataset.taskId;
-    if (!taskId) return;
+  async function generateSkillWithAI() {
+    const model = skillPicker.getModel();
+    if (!model) { alert('Please select a model'); return; }
 
-    const btn = $('#btnGenerateSkill');
+    const instructions = $('#csInstructions').value.trim();
+    if (!instructions) { alert('Instructions cannot be empty'); return; }
+
+    const name = $('#newSkillName').value.trim();
+    const domain = $('#newSkillDomain').value.trim();
+    const description = $('#newSkillDescription').value.trim();
+    const taskId = $('#btnGenerateSkillAI').dataset.taskId || '';
+
+    if (!name && !domain && !description && !taskId) {
+      alert('Please fill in at least a skill name or domain so the AI knows what to generate.');
+      return;
+    }
+
+    const btn = $('#btnGenerateSkillAI');
     const status = $('#generateSkillStatus');
     btn.disabled = true;
     status.textContent = 'Generating…';
 
-    const res = await chrome.runtime.sendMessage({ type: 'generateSkillFromChat', taskId });
+    // Track usage
+    if (skillPicker.getProvider() === 'openrouter') {
+      incrementModelUsage(model);
+    }
+
+    const res = await chrome.runtime.sendMessage({
+      type: 'generateSkillWithAI',
+      provider: skillPicker.getProvider(),
+      model,
+      reasoningEffort: skillPicker.getReasoning(),
+      instructions,
+      meta: { name, domain, description },
+      taskId: taskId || undefined
+    });
 
     btn.disabled = false;
     if (res?.success && res.content) {
       status.textContent = 'Done!';
       setTimeout(() => { status.textContent = ''; }, 3000);
-
-      // Parse the generated content and fill form fields
-      const lines = res.content.split('\n');
-      const meta = {};
-      let bodyStart = 0;
-      for (let i = 0; i < lines.length; i++) {
-        if (lines[i].trim() === '---') { bodyStart = i + 1; break; }
-        const ci = lines[i].indexOf(':');
-        if (ci > 0) {
-          const k = lines[i].slice(0, ci).trim().toLowerCase();
-          const v = lines[i].slice(ci + 1).trim();
-          if (['name', 'domain', 'description'].includes(k)) meta[k] = v;
-        }
-      }
-
-      if (meta.name)        $('#newSkillName').value = meta.name;
-      if (meta.domain)      $('#newSkillDomain').value = meta.domain;
-      if (meta.description) $('#newSkillDescription').value = meta.description;
-      $('#newSkillContent').value = lines.slice(bodyStart).join('\n').trim();
+      parseAndFillSkillContent(res.content);
     } else {
       status.textContent = 'Failed: ' + (res?.error || 'Unknown error');
     }
   }
+
+  function parseAndFillSkillContent(raw) {
+    const lines = raw.split('\n');
+    const meta = {};
+    let bodyStart = 0;
+    for (let i = 0; i < lines.length; i++) {
+      if (lines[i].trim() === '---') { bodyStart = i + 1; break; }
+      const ci = lines[i].indexOf(':');
+      if (ci > 0) {
+        const k = lines[i].slice(0, ci).trim().toLowerCase();
+        const v = lines[i].slice(ci + 1).trim();
+        if (['name', 'domain', 'description'].includes(k)) meta[k] = v;
+      }
+    }
+
+    if (meta.name)        $('#newSkillName').value = meta.name;
+    if (meta.domain)      $('#newSkillDomain').value = meta.domain;
+    if (meta.description) $('#newSkillDescription').value = meta.description;
+    $('#newSkillContent').value = lines.slice(bodyStart).join('\n').trim();
+  }
+
+  // ═══════════════════════════════════════════════════════════════════════════
+  //  SCRIPT SKILL (JSON) — Create / Run / Diagram
+  // ═══════════════════════════════════════════════════════════════════════════
+
+  let scriptSkillDiagram = null;
+  let ssDefaultInstructions = '';
+  let pendingRunSkill = null;
+  let runDiagram = null;
+
+  function handleSkillProgressEvent(event) {
+    if (!event) return;
+    switch (event.type) {
+      case 'step_start':
+        appendSystemMessage(`Step ${event.stepIndex + 1}: ${event.step?.label || event.stepId} — running`, 'info');
+        break;
+      case 'step_done':
+        finishStreamingMessage(); // flush any AI step streaming
+        appendSystemMessage(`Step ${event.stepIndex + 1}: ${event.stepId} — done`, 'success');
+        break;
+      case 'step_failed':
+        finishStreamingMessage();
+        appendSystemMessage(`Step ${event.stepIndex + 1}: ${event.stepId} — failed: ${event.error}`, 'error');
+        break;
+      case 'skill_done':
+        appendSystemMessage(`Skill completed (${event.stepsRun} steps)`, 'success');
+        break;
+      case 'skill_failed':
+        appendSystemMessage(`Skill failed at step: ${event.stepId || '?'} — ${event.reason || event.error || 'unknown'}`, 'error');
+        break;
+      case 'skill_cancelled':
+        appendSystemMessage(`Skill cancelled after ${event.stepsRun} steps`, 'warning');
+        break;
+
+      // ── AI step mini-loop events (show like normal chat) ──
+      case 'ai_step_thinking':
+        streamingThinking = '';
+        isStreaming = true;
+        break;
+      case 'ai_step_thinking_content':
+        streamingThinking += event.content;
+        updateStreamingMessage();
+        break;
+      case 'ai_step_text':
+        streamingContent = event.full;
+        updateStreamingMessage();
+        break;
+      case 'ai_step_tool_calls':
+        finishStreamingMessage();
+        for (const tc of event.tool_calls) {
+          appendToolCall(tc);
+        }
+        break;
+      case 'ai_step_tool_exec':
+        updateToolCallStatus(event.callId, 'executing', event.tool, event.args);
+        break;
+      case 'ai_step_tool_result':
+        updateToolCallResult(event.callId, { success: event.success }, event.tool);
+        break;
+    }
+  }
+
+  // Lazy-init diagram renderer
+  async function getSkillDiagram(container) {
+    const { SkillDiagram } = await import('./skill-diagram.js');
+    return new SkillDiagram(container);
+  }
+
+  // ── Script skill model picker ─────────────────────────────────────────────
+  // Reuse the same ModelPickerController class as for taskPicker / skillPicker
+  const ssPicker = new ModelPickerController({
+    providerTabs: '#ssProviderTabs',
+    modelSelect: '#ssModelSelect',
+    orPicker: '#ssOrModelPicker',
+    orTrigger: '#ssOrModelTrigger',
+    orLabel: '#ssOrModelLabel',
+    orDropdown: '#ssOrModelDropdown',
+    orSearch: '#ssOrModelSearch',
+    orList: '#ssOrModelList',
+    reasoningSelector: '#ssReasoningSelector',
+    defaultReasoning: 'medium',
+  });
+
+  const runPicker = new ModelPickerController({
+    providerTabs: '#rsProviderTabs',
+    modelSelect: '#rsModelSelect',
+    orPicker: '#rsOrModelPicker',
+    orTrigger: '#rsOrModelTrigger',
+    orLabel: '#rsOrModelLabel',
+    orDropdown: '#rsOrModelDropdown',
+    orSearch: '#rsOrModelSearch',
+    orList: '#rsOrModelList',
+    reasoningSelector: '#rsReasoningSelector',
+    defaultReasoning: 'low',
+  });
+
+  // ── Open / Close ──────────────────────────────────────────────────────────
+
+  function openCreateScriptSkillModal(taskId) {
+    $('#ssId').value = '';
+    $('#ssJsonEditor').value = '';
+    $('#ssJsonErrors').textContent = '';
+    $('#generateScriptStatus').textContent = '';
+    // Collapse AI section by default
+    $('#ssAiBody').classList.remove('open');
+    const chev = $('#ssAiToggle')?.querySelector('.cs-ai-chevron');
+    if (chev) chev.classList.remove('open');
+    // Clear diagram preview
+    const preview = $('#ssDiagramPreview');
+    preview.innerHTML = '<div class="sd-empty">Enter JSON to see diagram</div>';
+    scriptSkillDiagram = null;
+
+    // Store taskId for AI generation with conversation context
+    $('#btnGenerateScriptAI').dataset.taskId = taskId || '';
+
+    // Pre-fill ID from agent name if creating from conversation
+    if (taskId) {
+      const agent = agents.find(a => a.taskId === taskId);
+      if (agent?.name) {
+        $('#ssId').value = agent.name.toLowerCase().replace(/[^a-z0-9]+/g, '_').replace(/^_|_$/g, '').slice(0, 40);
+      }
+      // Auto-open AI section when creating from conversation
+      $('#ssAiBody').classList.add('open');
+      if (chev) chev.classList.add('open');
+      loadScriptSkillInstructions(false);
+      ssPicker.loadModels();
+    }
+
+    $('#createScriptSkillModal').classList.add('active');
+  }
+
+  async function openEditScriptSkillModal(skillId) {
+    const res = await chrome.runtime.sendMessage({ type: 'getScriptSkill', id: skillId });
+    if (!res?.skill) { alert('Skill not found'); return; }
+    const skill = res.skill;
+
+    // Open modal in "create" mode but pre-fill with existing data
+    $('#ssId').value = skillId;
+    $('#ssJsonEditor').value = JSON.stringify(skill, null, 2);
+    $('#ssJsonErrors').textContent = '';
+    $('#generateScriptStatus').textContent = '';
+    // Collapse AI section
+    $('#ssAiBody').classList.remove('open');
+    const chev = $('#ssAiToggle')?.querySelector('.cs-ai-chevron');
+    if (chev) chev.classList.remove('open');
+    // Render diagram preview
+    previewScriptSkillDiagram();
+    $('#btnGenerateScriptAI').dataset.taskId = '';
+
+    $('#createScriptSkillModal').classList.add('active');
+  }
+
+  function closeCreateScriptSkillModal() {
+    $('#createScriptSkillModal').classList.remove('active');
+  }
+
+  function toggleSsAiSection() {
+    const body = $('#ssAiBody');
+    const chevron = $('#ssAiToggle').querySelector('.cs-ai-chevron');
+    const isOpen = body.classList.toggle('open');
+    chevron.classList.toggle('open', isOpen);
+    if (isOpen && !$('#ssInstructions').value) {
+      loadScriptSkillInstructions(false);
+      ssPicker.loadModels();
+    }
+  }
+
+  async function loadScriptSkillInstructions(force) {
+    if (!cachedToolsInfo || force) {
+      const res = await chrome.runtime.sendMessage({ type: 'getToolsInfo' });
+      cachedToolsInfo = res?.success ? res.toolsInfo : '(Failed to load tools)';
+    }
+    ssDefaultInstructions = buildScriptSkillInstructions(cachedToolsInfo);
+    $('#ssInstructions').value = ssDefaultInstructions;
+  }
+
+  // ── Live diagram preview ──────────────────────────────────────────────────
+
+  async function previewScriptSkillDiagram() {
+    const raw = $('#ssJsonEditor').value.trim();
+    const errorEl = $('#ssJsonErrors');
+    const preview = $('#ssDiagramPreview');
+
+    if (!raw) {
+      errorEl.textContent = '';
+      preview.innerHTML = '<div class="sd-empty">Enter JSON to see diagram</div>';
+      return;
+    }
+
+    let skill;
+    try {
+      skill = JSON.parse(raw);
+    } catch (e) {
+      errorEl.textContent = `JSON Error: ${e.message}`;
+      return;
+    }
+
+    // Validate via service worker
+    const vRes = await chrome.runtime.sendMessage({ type: 'validateSkillJSON', skill });
+    if (!vRes.success) {
+      errorEl.textContent = vRes.errors.join('\n');
+      return;
+    }
+    errorEl.textContent = '';
+
+    // Render diagram
+    if (!scriptSkillDiagram) {
+      scriptSkillDiagram = await getSkillDiagram(preview);
+    }
+    scriptSkillDiagram.render(skill);
+  }
+
+  // ── Save ──────────────────────────────────────────────────────────────────
+
+  async function saveNewScriptSkill() {
+    const id = $('#ssId').value.trim().replace(/\s+/g, '_').toLowerCase();
+    if (!id) { alert('Skill ID is required.'); return; }
+
+    const raw = $('#ssJsonEditor').value.trim();
+    if (!raw) { alert('Skill JSON is required.'); return; }
+
+    let skill;
+    try { skill = JSON.parse(raw); } catch (e) { alert(`Invalid JSON: ${e.message}`); return; }
+
+    try {
+      await chrome.runtime.sendMessage({ type: 'saveScriptSkill', id, skill });
+      closeCreateScriptSkillModal();
+      await loadSkills();
+    } catch (e) {
+      alert(`Save failed: ${e.message}`);
+    }
+  }
+
+  // ── AI Generation ─────────────────────────────────────────────────────────
+
+  async function generateScriptSkillWithAI() {
+    const btn = $('#btnGenerateScriptAI');
+    const status = $('#generateScriptStatus');
+    btn.disabled = true;
+    status.textContent = 'Generating…';
+
+    const instructions = $('#ssInstructions').value || ssDefaultInstructions;
+    const model = ssPicker.getModel();
+    if (!model) { status.textContent = 'Select a model first'; btn.disabled = false; return; }
+
+    const taskId = $('#btnGenerateScriptAI').dataset.taskId || undefined;
+
+    const res = await chrome.runtime.sendMessage({
+      type: 'generateSkillWithAI',
+      provider: ssPicker.getProvider(),
+      model,
+      reasoningEffort: ssPicker.getReasoning(),
+      instructions,
+      meta: { name: $('#ssId').value || 'script_skill' },
+      taskId,
+    });
+
+    btn.disabled = false;
+    if (res?.success && res.content) {
+      status.textContent = 'Done!';
+      setTimeout(() => { status.textContent = ''; }, 3000);
+      // Try to extract JSON from the response (may have markdown fences)
+      let json = res.content.trim();
+      const fenceMatch = json.match(/```(?:json)?\s*([\s\S]*?)```/);
+      if (fenceMatch) json = fenceMatch[1].trim();
+      $('#ssJsonEditor').value = json;
+      previewScriptSkillDiagram();
+    } else {
+      status.textContent = 'Failed: ' + (res?.error || 'Unknown error');
+    }
+  }
+
+  // ── Run Skill ─────────────────────────────────────────────────────────────
+
+  async function openRunSkillModal(skillId) {
+    const res = await chrome.runtime.sendMessage({ type: 'getScriptSkill', id: skillId });
+    if (!res?.success || !res.skill) { alert('Skill not found'); return; }
+
+    const skill = res.skill;
+    pendingRunSkill = { id: skillId, skill };
+
+    $('#runSkillTitle').textContent = `Run: ${skill.name}`;
+
+    // Build input form
+    const inputsDiv = $('#runSkillInputs');
+    inputsDiv.innerHTML = '';
+    if (skill.inputs && skill.inputs.length > 0) {
+      for (const inp of skill.inputs) {
+        const fg = document.createElement('div');
+        fg.className = 'form-group';
+        fg.innerHTML = `
+          <label>${inp.label || inp.id}${inp.required ? ' <span style="color:var(--danger)">*</span>' : ''}</label>
+          ${inp.type === 'select' && inp.options
+            ? `<select class="form-select run-skill-input" data-id="${inp.id}">${inp.options.map(o => `<option value="${o}">${o}</option>`).join('')}</select>`
+            : `<input type="${inp.type === 'number' ? 'number' : 'text'}" class="form-input run-skill-input" data-id="${inp.id}" placeholder="${inp.placeholder || ''}" ${inp.defaultValue ? `value="${inp.defaultValue}"` : ''}>`
+          }
+        `;
+        inputsDiv.appendChild(fg);
+      }
+    } else {
+      inputsDiv.innerHTML = '<p class="form-hint">This skill has no inputs — it will run directly.</p>';
+    }
+
+    // Load model picker
+    await runPicker.loadModels();
+
+    // Render mini diagram
+    const diagDiv = $('#runSkillDiagram');
+    runDiagram = await getSkillDiagram(diagDiv);
+    runDiagram.render(skill);
+
+    $('#runSkillModal').classList.add('active');
+  }
+
+  function closeRunSkillModal() {
+    $('#runSkillModal').classList.remove('active');
+    pendingRunSkill = null;
+    runDiagram = null;
+  }
+
+  async function confirmRunSkill() {
+    if (!pendingRunSkill) return;
+
+    // Collect inputs
+    const inputValues = {};
+    document.querySelectorAll('.run-skill-input').forEach(el => {
+      inputValues[el.dataset.id] = el.value;
+    });
+
+    // Check required
+    const skill = pendingRunSkill.skill;
+    if (skill.inputs) {
+      for (const inp of skill.inputs) {
+        if (inp.required && !inputValues[inp.id]) {
+          alert(`"${inp.label || inp.id}" is required.`);
+          return;
+        }
+      }
+    }
+
+    const runModel = runPicker.getModel();
+    if (!runModel) { alert('Select a model first.'); return; }
+
+    // Auto-create a task if none is active
+    let taskId = currentTaskId;
+    if (!taskId) {
+      const skillName = skill.name || pendingRunSkill.id;
+      const createRes = await chrome.runtime.sendMessage({
+        type: 'createAgent',
+        config: {
+          name: `Skill: ${skillName}`,
+          provider: runPicker.getProvider(),
+          model: runModel,
+          reasoningEffort: runPicker.getReasoning(),
+          permissions: { navigation: true, interaction: true, screenshots: true, terminal: false, javascript: false },
+        }
+      });
+      if (!createRes?.success) {
+        alert('Failed to create task: ' + (createRes?.error || 'Unknown'));
+        return;
+      }
+      taskId = createRes.taskId;
+      // Just ensure the agent has a tab — don't start the chat loop
+      await chrome.runtime.sendMessage({ type: 'ensureAgentTab', taskId });
+      await loadAgents();
+      openTaskDetail(taskId);
+    }
+
+    const runProvider = runPicker.getProvider();
+    const runReasoning = runPicker.getReasoning();
+    const skillId = pendingRunSkill.id;
+
+    closeRunSkillModal();
+
+    // Send run command with explicit model selection
+    const res = await chrome.runtime.sendMessage({
+      type: 'runSkillScript',
+      taskId,
+      skillId,
+      inputValues,
+      provider: runProvider,
+      model: runModel,
+      reasoningEffort: runReasoning,
+    });
+
+    if (!res?.success) {
+      appendChatMessage('assistant', `Skill failed: ${res?.error || 'Unknown error'}`);
+    }
+  }
+
+  // ── Debounce helper ───────────────────────────────────────────────────────
+
+  function debounce(fn, ms) {
+    let t;
+    return (...args) => { clearTimeout(t); t = setTimeout(() => fn(...args), ms); };
+  }
+
+  // ── Update loadSkills to include script skills ────────────────────────────
+  // (Already integrated into loadSkills/renderSkillsRow above)
+
 })();

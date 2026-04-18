@@ -18,9 +18,39 @@ export class ToolExecutor {
   // Execute a tool call and return the result
   async execute(toolName, args, context) {
     const { tabId, permissions } = context;
+    const shouldDiff = tabId && ToolExecutor.DIFF_TOOLS.has(toolName);
 
     try {
-      switch (toolName) {
+      // Take before-snapshot for action tools
+      let beforeSnap = null;
+      if (shouldDiff) {
+        beforeSnap = await this._snapPage(tabId).catch(() => null);
+      }
+
+      const result = await this._executeInner(toolName, args, tabId, permissions, context);
+
+      // Take after-snapshot and diff
+      if (shouldDiff && beforeSnap && result.success !== false) {
+        // Wait for auto-wait duration first so page settles
+        const autoWait = ToolExecutor.AUTO_WAITS[toolName];
+        if (autoWait && !context._skipAutoWaitForDiff) {
+          await new Promise(r => setTimeout(r, autoWait));
+        }
+        const afterSnap = await this._snapPage(tabId).catch(() => null);
+        if (afterSnap) {
+          const changes = this._diffSnapshots(beforeSnap, afterSnap);
+          if (changes) result.pageChanges = changes;
+        }
+      }
+
+      return result;
+    } catch (err) {
+      return { success: false, error: err.message };
+    }
+  }
+
+  async _executeInner(toolName, args, tabId, permissions, context) {
+    switch (toolName) {
         case 'navigate':
           return await this.navigate(tabId, args.url);
         case 'click':
@@ -84,9 +114,6 @@ export class ToolExecutor {
           return { success: false, failed: true, reason: args.reason };
         default:
           return { success: false, error: `Unknown tool: ${toolName}` };
-      }
-    } catch (err) {
-      return { success: false, error: err.message };
     }
   }
 
@@ -599,6 +626,13 @@ export class ToolExecutor {
   // Tools that are NOT allowed inside execute_steps (terminal-level or meta)
   static BLOCKED_STEPS = new Set(['execute_steps', 'task_complete', 'task_failed', 'execute_terminal']);
 
+  // Tools that trigger before/after page snapshot diffing
+  static DIFF_TOOLS = new Set([
+    'navigate', 'click', 'type_text', 'press_key', 'select_option',
+    'fill_form', 'go_back', 'go_forward', 'hover', 'press_mapped_button',
+    'scroll', 'execute_javascript'
+  ]);
+
   /**
    * Execute a multi-section plan of tool calls sequentially.
    * Emits progress via context.onProgress(event) callback.
@@ -648,7 +682,19 @@ export class ToolExecutor {
           permissions: context.permissions
         });
 
-        sectionResults.push({ tool, args, result });
+        // Run verification assertions if step has them
+        let verifyResult = null;
+        if (step.verify && result.success !== false) {
+          verifyResult = await this._verifyState(context.tabId, step.verify).catch(() => null);
+          if (verifyResult && !verifyResult.allPassed) {
+            const failedChecks = (verifyResult.results || []).filter(r => !r.passed);
+            const failMsg = failedChecks.map(r => `${r.check}: expected "${r.expected}", got "${r.actual || 'not found'}"`).join('; ');
+            result.success = false;
+            result.error = `Verification failed: ${failMsg}`;
+          }
+        }
+
+        sectionResults.push({ tool, args, result, verify: verifyResult });
 
         // Collect screenshots
         if ((tool === 'screenshot' || tool === 'map_buttons') && result.success && result.screenshot) {
@@ -669,12 +715,14 @@ export class ToolExecutor {
           return this._buildStepsPlanResult(allResults, plan, si, ti, screenshots);
         }
 
-        emit({ type: 'step_done', sectionIndex: si, stepIndex: ti, tool, result });
+        emit({ type: 'step_done', sectionIndex: si, stepIndex: ti, tool, result, verify: verifyResult });
 
-        // Auto-wait after certain tools
-        const autoWait = ToolExecutor.AUTO_WAITS[tool];
-        if (autoWait) {
-          await new Promise(r => setTimeout(r, autoWait));
+        // Auto-wait after non-diff tools (diff tools already waited inside execute())
+        if (!ToolExecutor.DIFF_TOOLS.has(tool)) {
+          const autoWait = ToolExecutor.AUTO_WAITS[tool];
+          if (autoWait) {
+            await new Promise(r => setTimeout(r, autoWait));
+          }
         }
       }
 
@@ -690,11 +738,16 @@ export class ToolExecutor {
       sections: allResults.map(s => ({
         section: s.section,
         completed: s.completed,
-        steps: s.steps.map(st => ({
-          tool: st.tool,
-          success: st.result.success,
-          message: st.result.message || st.result.error || ''
-        }))
+        steps: s.steps.map(st => {
+          const step = {
+            tool: st.tool,
+            success: st.result.success,
+            message: st.result.message || st.result.error || ''
+          };
+          if (st.result.pageChanges) step.pageChanges = st.result.pageChanges;
+          if (st.verify) step.verify = st.verify;
+          return step;
+        })
       })),
       screenshots // returned for agent-manager to inject as images
     };
@@ -726,11 +779,16 @@ export class ToolExecutor {
       sections: completedSections.map(s => ({
         section: s.section,
         completed: s.completed,
-        steps: s.steps.map(st => ({
-          tool: st.tool,
-          success: st.result.success,
-          message: st.result.message || st.result.error || ''
-        }))
+        steps: s.steps.map(st => {
+          const step = {
+            tool: st.tool,
+            success: st.result.success,
+            message: st.result.message || st.result.error || ''
+          };
+          if (st.result.pageChanges) step.pageChanges = st.result.pageChanges;
+          if (st.verify) step.verify = st.verify;
+          return step;
+        })
       })),
       remaining,
       screenshots
@@ -829,6 +887,66 @@ export class ToolExecutor {
         files: ['content/content.js']
       });
     }
+  }
+
+  // ============ PAGE SNAPSHOT & DIFF ============
+
+  async _snapPage(tabId) {
+    return await this._sendToContent(tabId, { action: 'page_snapshot' });
+  }
+
+  _diffSnapshots(before, after) {
+    if (!before?.success || !after?.success) return null;
+
+    const changes = {};
+
+    // URL change
+    if (before.url !== after.url) {
+      changes.url = { from: before.url, to: after.url };
+    }
+
+    // Title change
+    if (before.title !== after.title) {
+      changes.title = { from: before.title, to: after.title };
+    }
+
+    // Compare notable elements by selector key
+    const beforeMap = new Map();
+    for (const el of (before.notableElements || [])) {
+      beforeMap.set(el.selector, el);
+    }
+    const afterMap = new Map();
+    for (const el of (after.notableElements || [])) {
+      afterMap.set(el.selector, el);
+    }
+
+    // Elements that appeared (in after but not before)
+    const appeared = [];
+    for (const [sel, el] of afterMap) {
+      if (!beforeMap.has(sel)) {
+        appeared.push({ selector: sel, tag: el.tag, role: el.role, text: el.text });
+      }
+    }
+
+    // Elements that disappeared (in before but not after)
+    const disappeared = [];
+    for (const [sel, el] of beforeMap) {
+      if (!afterMap.has(sel)) {
+        disappeared.push({ selector: sel, tag: el.tag, role: el.role, text: el.text });
+      }
+    }
+
+    if (appeared.length) changes.appeared = appeared;
+    if (disappeared.length) changes.disappeared = disappeared;
+
+    // Return null if nothing changed
+    return Object.keys(changes).length > 0 ? changes : null;
+  }
+
+  // ============ VERIFY STATE (assertions) ============
+
+  async _verifyState(tabId, checks) {
+    return await this._sendToContent(tabId, { action: 'verify_state', checks });
   }
 
   _waitForTabLoad(tabId, timeout = 15000) {

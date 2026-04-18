@@ -49,6 +49,10 @@
         return doGetElementCoords(message.selector);
       case 'get_mapped_button_coords':
         return doGetMappedButtonCoords(message.n);
+      case 'page_snapshot':
+        return doPageSnapshot();
+      case 'verify_state':
+        return doVerifyState(message.checks);
       default:
         return { success: false, error: `Unknown action: ${message.action}` };
     }
@@ -708,4 +712,159 @@
 
     return path.join(' > ');
   }
+
+  // ============ PAGE SNAPSHOT (lightweight DOM fingerprint) ============
+
+  function doPageSnapshot() {
+    const url = window.location.href;
+    const title = document.title;
+
+    // Notable selectors to scan for — covers modals, dialogs, alerts, banners, forms, overlays
+    const notableSelectors = [
+      'dialog[open]',
+      '[role="dialog"]',
+      '[role="alertdialog"]',
+      '[role="alert"]',
+      '[role="banner"]',
+      '[role="status"]',
+      '.modal', '.Modal',
+      '.popup', '.Popup',
+      '.overlay', '.Overlay',
+      '.toast', '.Toast',
+      '.error', '.Error', '.alert-error',
+      '.success', '.alert-success',
+      '.notification', '.Notification',
+      '.snackbar', '.Snackbar',
+      '[class*="modal"]',
+      '[class*="dialog"]',
+      '[class*="popup"]',
+      '[class*="overlay"]',
+      '[class*="toast"]',
+      '[class*="error"]',
+      '[class*="banner"]',
+      'form',
+      '[aria-modal="true"]',
+      '[data-testid]'
+    ];
+
+    const notableElements = [];
+    const seen = new WeakSet();
+
+    for (const sel of notableSelectors) {
+      try {
+        const els = document.querySelectorAll(sel);
+        for (const el of els) {
+          if (seen.has(el)) continue;
+          seen.add(el);
+          const rect = el.getBoundingClientRect();
+          // Only include visible elements
+          if (rect.width < 2 || rect.height < 2) continue;
+          const cs = window.getComputedStyle(el);
+          if (cs.display === 'none' || cs.visibility === 'hidden' || parseFloat(cs.opacity) < 0.05) continue;
+
+          const tag = el.tagName.toLowerCase();
+          const text = (el.textContent || '').trim().replace(/\s+/g, ' ').substring(0, 120);
+          const classes = (typeof el.className === 'string' ? el.className : '').trim().substring(0, 150);
+
+          notableElements.push({
+            selector: _quickSelector(el),
+            tag,
+            role: el.getAttribute('role') || '',
+            classes,
+            text,
+            ariaLabel: el.getAttribute('aria-label') || '',
+            visible: true
+          });
+
+          if (notableElements.length >= 40) break;
+        }
+      } catch {}
+      if (notableElements.length >= 40) break;
+    }
+
+    return {
+      success: true,
+      url,
+      title,
+      readyState: document.readyState,
+      notableElements
+    };
+  }
+
+  // Quick selector for snapshot diffing — prefer id, then data-testid, then role+class, then tag path
+  function _quickSelector(el) {
+    if (el.id) return '#' + CSS.escape(el.id);
+    const testId = el.getAttribute('data-testid');
+    if (testId) return `[data-testid="${CSS.escape(testId)}"]`;
+    const role = el.getAttribute('role');
+    if (role) {
+      const cls = (typeof el.className === 'string' ? el.className : '').trim().split(/\s+/)[0];
+      return cls ? `[role="${role}"].${CSS.escape(cls)}` : `[role="${role}"]`;
+    }
+    const tag = el.tagName.toLowerCase();
+    const cls = (typeof el.className === 'string' ? el.className : '').trim().split(/\s+/)[0];
+    return cls ? `${tag}.${CSS.escape(cls)}` : tag;
+  }
+
+  // ============ VERIFY STATE (assertions for execute_steps) ============
+
+  function doVerifyState(checks) {
+    const results = [];
+    let allPassed = true;
+
+    if (checks.url_contains) {
+      const passed = window.location.href.includes(checks.url_contains);
+      results.push({ check: 'url_contains', expected: checks.url_contains, actual: window.location.href, passed });
+      if (!passed) allPassed = false;
+    }
+
+    if (checks.url_not_contains) {
+      const passed = !window.location.href.includes(checks.url_not_contains);
+      results.push({ check: 'url_not_contains', expected: checks.url_not_contains, actual: window.location.href, passed });
+      if (!passed) allPassed = false;
+    }
+
+    if (checks.title_contains) {
+      const passed = document.title.toLowerCase().includes(checks.title_contains.toLowerCase());
+      results.push({ check: 'title_contains', expected: checks.title_contains, actual: document.title, passed });
+      if (!passed) allPassed = false;
+    }
+
+    if (checks.element_exists) {
+      const el = document.querySelector(checks.element_exists);
+      const passed = !!el;
+      results.push({ check: 'element_exists', expected: checks.element_exists, passed });
+      if (!passed) allPassed = false;
+    }
+
+    if (checks.element_absent) {
+      const el = document.querySelector(checks.element_absent);
+      const visible = el ? (() => {
+        const r = el.getBoundingClientRect();
+        if (r.width < 2 || r.height < 2) return false;
+        const cs = window.getComputedStyle(el);
+        return cs.display !== 'none' && cs.visibility !== 'hidden';
+      })() : false;
+      const passed = !visible;
+      results.push({ check: 'element_absent', expected: checks.element_absent, passed });
+      if (!passed) allPassed = false;
+    }
+
+    if (checks.text_contains) {
+      const bodyText = document.body.innerText || '';
+      const passed = bodyText.includes(checks.text_contains);
+      results.push({ check: 'text_contains', expected: checks.text_contains, passed });
+      if (!passed) allPassed = false;
+    }
+
+    if (checks.text_absent) {
+      const bodyText = document.body.innerText || '';
+      const passed = !bodyText.includes(checks.text_absent);
+      results.push({ check: 'text_absent', expected: checks.text_absent, passed });
+      if (!passed) allPassed = false;
+    }
+
+    return { success: true, allPassed, results };
+  }
+
 })();
