@@ -2347,8 +2347,11 @@ Generate ONLY the JSON. Extract tool calls, selectors, and patterns from the con
       inputValues[el.dataset.id] = el.value;
     });
 
-    // Check required
+    // Capture everything we need from pendingRunSkill before any awaits,
+    // because the modal (and pendingRunSkill) can be closed/nulled while we wait.
     const skill = pendingRunSkill.skill;
+    const skillId = pendingRunSkill.id;
+
     if (skill.inputs) {
       for (const inp of skill.inputs) {
         if (inp.required && !inputValues[inp.id]) {
@@ -2388,7 +2391,6 @@ Generate ONLY the JSON. Extract tool calls, selectors, and patterns from the con
 
     const runProvider = runPicker.getProvider();
     const runReasoning = runPicker.getReasoning();
-    const skillId = pendingRunSkill.id;
 
     closeRunSkillModal();
 

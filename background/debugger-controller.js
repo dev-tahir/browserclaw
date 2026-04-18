@@ -206,7 +206,20 @@ export class DebuggerController {
    * Select all text in the currently focused element (Ctrl+A / Cmd+A).
    */
   async selectAll(tabId) {
-    await this.pressKey(tabId, 'a', { ctrl: true });
+    await this._ensureAttached(tabId);
+    // Send Ctrl+A directly with correct key codes so Chrome recognises this as a
+    // control combination and does NOT insert the character 'a'.
+    const params = {
+      key: 'a',
+      code: 'KeyA',
+      windowsVirtualKeyCode: 65,
+      nativeVirtualKeyCode: 65,
+      modifiers: 2, // Ctrl
+      text: '',
+      unmodifiedText: ''
+    };
+    await this._sendCommand(tabId, 'Input.dispatchKeyEvent', { type: 'rawKeyDown', ...params });
+    await this._sendCommand(tabId, 'Input.dispatchKeyEvent', { type: 'keyUp',     ...params });
   }
 
   /**
