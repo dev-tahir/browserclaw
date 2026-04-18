@@ -4,12 +4,14 @@
 import { AgentManager } from './agent-manager.js';
 import { AIProvider } from './ai-provider.js';
 import { SkillsManager } from './skills-manager.js';
+import { ScheduleManager } from './schedule-manager.js';
 import { TOOLS } from './tools-definition.js';
 import { validateSkill } from './skill-format.js';
 
 const agentManager = new AgentManager();
 const aiProvider = new AIProvider();
 const skillsManager = new SkillsManager();
+const scheduleManager = new ScheduleManager();
 
 // ============ INITIALIZATION ============
 
@@ -17,30 +19,38 @@ chrome.runtime.onInstalled.addListener(async () => {
   console.log('AI Browser Control Agent installed');
   await aiProvider.loadSettings();
   await agentManager.loadAgents();
+  await scheduleManager.load();
 
   // Set up keepalive alarm for MV3
   chrome.alarms.create('keepalive', { periodInMinutes: 0.5 });
+  // Schedule checker runs every minute
+  chrome.alarms.create('schedule-check', { periodInMinutes: 1 });
 });
 
-chrome.alarms.onAlarm.addListener((alarm) => {
+chrome.alarms.onAlarm.addListener(async (alarm) => {
   if (alarm.name === 'keepalive') {
-    // Check if any agents are running and keep SW alive
     const running = Array.from(agentManager.agents.values()).some(a => a.status === 'running');
     if (running) {
       console.log('Keepalive: agents running');
     }
+  } else if (alarm.name === 'schedule-check') {
+    await checkAndRunSchedules();
   }
 });
 
 chrome.runtime.onStartup.addListener(async () => {
   await aiProvider.loadSettings();
   await agentManager.loadAgents();
+  await scheduleManager.load();
+  // Check for missed schedules on startup
+  await checkAndRunSchedules();
 });
 
 // Self-initialize
 (async () => {
   await aiProvider.loadSettings();
   await agentManager.loadAgents();
+  await scheduleManager.load();
 })();
 
 // ============ MESSAGE HANDLING ============
@@ -135,6 +145,26 @@ async function handleMessage(message, sender) {
 
     case 'generateSkillWithAI':
       return await generateSkillWithAI(message);
+
+    // ---- Schedules ----
+    case 'getSchedules':
+      return { success: true, schedules: scheduleManager.getAll() };
+
+    case 'saveSchedule': {
+      const saved = await scheduleManager.save(message.schedule);
+      return { success: true, schedule: saved };
+    }
+
+    case 'deleteSchedule':
+      await scheduleManager.delete(message.id);
+      return { success: true };
+
+    case 'runScheduleNow': {
+      const sched = scheduleManager.get(message.id);
+      if (!sched) return { success: false, error: 'Schedule not found' };
+      await executeSchedule(sched);
+      return { success: true };
+    }
 
     // ---- Agent Management ----
     case 'createAgent': {
@@ -368,4 +398,81 @@ function getAgentForUI(agent) {
     error: agent.error,
     thinking: agent.thinking
   };
+}
+
+// ============ SCHEDULED TASK EXECUTION ============
+
+async function checkAndRunSchedules() {
+  await scheduleManager.load();
+  const due = scheduleManager.getDueSchedules();
+
+  for (const sched of due) {
+    // If schedule was missed (nextRun is significantly past) and catchUp is false, skip it
+    const missedBy = Date.now() - sched.nextRun;
+    if (missedBy > 120000 && !sched.catchUp) {
+      // More than 2 minutes late and no catch-up — just advance to next run
+      await scheduleManager.markRan(sched.id);
+      continue;
+    }
+
+    try {
+      await executeSchedule(sched);
+    } catch (err) {
+      console.error(`Schedule "${sched.name}" failed:`, err.message);
+    }
+  }
+}
+
+async function executeSchedule(sched) {
+  console.log(`Running scheduled task: ${sched.name}`);
+
+  // Resolve the skill
+  let skill = null;
+  if (sched.skillType === 'script') {
+    skill = await skillsManager.getScriptSkill(sched.skillId);
+  }
+
+  if (!skill && sched.skillType === 'script') {
+    console.error(`Schedule "${sched.name}": skill "${sched.skillId}" not found`);
+    await scheduleManager.markRan(sched.id);
+    return;
+  }
+
+  // Create an agent for this run
+  let skillsAppendix = '';
+  if (sched.skillType === 'text') {
+    const allSkills = await skillsManager.getSkills();
+    skillsAppendix = skillsManager.getSkillsForPrompt(allSkills, [sched.skillId], 'manual');
+  }
+
+  const taskId = await agentManager.createAgent({
+    name: `⏰ ${sched.name}`,
+    provider: sched.provider,
+    model: sched.model,
+    reasoningEffort: sched.reasoningEffort || 'low',
+    permissions: { navigation: true, interaction: true, screenshots: true, terminal: false, javascript: false },
+    skillsAppendix,
+  });
+
+  await agentManager.ensureTab(taskId);
+
+  // Mark as ran (update nextRun) before execution so we don't double-fire
+  await scheduleManager.markRan(sched.id);
+
+  if (sched.skillType === 'script') {
+    // Run script skill
+    await agentManager.runSkillScript(taskId, skill, sched.inputValues || {}, {
+      provider: sched.provider,
+      model: sched.model,
+      reasoningEffort: sched.reasoningEffort || 'low',
+    });
+  } else {
+    // Run text skill as agent task
+    const textSkills = await skillsManager.getSkills();
+    const textSkill = textSkills.find(s => s.id === sched.skillId);
+    const prompt = textSkill
+      ? `Execute the skill "${textSkill.name}": ${textSkill.body}`
+      : `Run scheduled task: ${sched.name}`;
+    await agentManager.startAgent(taskId, prompt);
+  }
 }

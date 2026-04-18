@@ -52,6 +52,23 @@
         <div class="skills-empty">No skills yet — add one to give agents domain knowledge.</div>
       </div>
     </div>
+
+    <!-- ====== SCHEDULED ROW ====== -->
+    <div id="scheduledRow" class="skills-row">
+      <div class="skills-row-header">
+        <span class="skills-row-title">Scheduled</span>
+        <div class="skills-row-actions">
+          <button id="btnAddSchedule" class="btn btn-ghost btn-sm">
+            <svg width="12" height="12" viewBox="0 0 16 16" fill="none"><path d="M8 3v10M3 8h10" stroke="currentColor" stroke-width="2" stroke-linecap="round"/></svg>
+            Add Schedule
+          </button>
+        </div>
+      </div>
+      <div id="scheduledContainer" class="skills-container">
+        <div class="skills-empty">No scheduled tasks yet.</div>
+      </div>
+    </div>
+
     <!-- Task Grid View -->
     <div id="taskGridView" class="view active">
       <div class="view-header">
@@ -578,6 +595,134 @@
       <div class="modal-footer">
         <button class="btn btn-ghost" id="btnCancelRunSkill">Cancel</button>
         <button class="btn btn-primary" id="btnConfirmRunSkill">Run</button>
+      </div>
+    </div>
+  </div>
+
+  <!-- ====== CREATE / EDIT SCHEDULE MODAL ====== -->
+  <div id="scheduleModal" class="modal-overlay">
+    <div class="modal" style="max-width:520px">
+      <div class="modal-header">
+        <h2 id="scheduleModalTitle">New Schedule</h2>
+        <button class="modal-close" id="btnCloseSchedule">&times;</button>
+      </div>
+      <div class="modal-body">
+        <!-- Schedule name -->
+        <div class="form-group">
+          <label>Name</label>
+          <input type="text" id="schedName" class="form-input" placeholder="e.g. Daily news post">
+        </div>
+
+        <!-- Skill selection -->
+        <div class="form-group">
+          <label>Skill</label>
+          <select id="schedSkillSelect" class="form-select">
+            <option value="">— Select a skill —</option>
+          </select>
+        </div>
+
+        <!-- Skill inputs (dynamic) -->
+        <div id="schedSkillInputs"></div>
+
+        <!-- Model selection -->
+        <label class="form-label" style="margin-bottom:6px;font-weight:600">Model</label>
+        <div class="cs-ai-model-row">
+          <div class="form-group">
+            <div class="provider-tabs" id="schProviderTabs">
+              <button class="provider-tab active" data-provider="ollama">Ollama</button>
+              <button class="provider-tab" data-provider="openrouter">OpenRouter</button>
+            </div>
+          </div>
+          <div class="form-group">
+            <select id="schModelSelect" class="form-select"></select>
+            <div id="schOrModelPicker" class="or-model-picker" style="display:none">
+              <div class="or-model-trigger" id="schOrModelTrigger" tabindex="0">
+                <span id="schOrModelLabel">Select a model…</span>
+                <svg width="10" height="6" viewBox="0 0 10 6" fill="none"><path d="M1 1l4 4 4-4" stroke="currentColor" stroke-width="1.5" stroke-linecap="round"/></svg>
+              </div>
+              <div class="or-model-dropdown" id="schOrModelDropdown">
+                <div class="or-model-search-wrap">
+                  <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round"><circle cx="11" cy="11" r="8"/><path d="M21 21l-4.35-4.35"/></svg>
+                  <input type="text" id="schOrModelSearch" placeholder="Search models…" autocomplete="off" spellcheck="false">
+                </div>
+                <div id="schOrModelList" class="or-model-list"></div>
+              </div>
+            </div>
+          </div>
+          <div class="form-group">
+            <div class="reasoning-selector" id="schReasoningSelector">
+              <button class="reasoning-btn active" data-value="low">Low</button>
+              <button class="reasoning-btn" data-value="medium">Med</button>
+              <button class="reasoning-btn" data-value="high">High</button>
+            </div>
+          </div>
+        </div>
+
+        <!-- Repeat schedule -->
+        <div class="form-group">
+          <label>Repeat</label>
+          <select id="schedRepeat" class="form-select">
+            <option value="once">Once</option>
+            <option value="hourly">Every hour</option>
+            <option value="daily" selected>Every day</option>
+            <option value="weekdays">Weekdays (Mon–Fri)</option>
+            <option value="weekly">Every week</option>
+            <option value="custom">Custom interval…</option>
+          </select>
+        </div>
+
+        <!-- Custom interval (hidden by default) -->
+        <div id="schedCustomInterval" class="form-group" style="display:none">
+          <label>Every</label>
+          <div style="display:flex;gap:8px;align-items:center">
+            <input type="number" id="schedCustomValue" class="form-input" value="2" min="1" style="width:80px">
+            <select id="schedCustomUnit" class="form-select" style="width:auto">
+              <option value="minutes">minutes</option>
+              <option value="hours" selected>hours</option>
+              <option value="days">days</option>
+            </select>
+          </div>
+        </div>
+
+        <!-- Time of day (for daily/weekly/weekdays) -->
+        <div id="schedTimeGroup" class="form-group">
+          <label>Time</label>
+          <input type="time" id="schedTime" class="form-input" value="09:00">
+        </div>
+
+        <!-- Day of week (for weekly) -->
+        <div id="schedDayGroup" class="form-group" style="display:none">
+          <label>Day</label>
+          <select id="schedDay" class="form-select">
+            <option value="0">Sunday</option>
+            <option value="1" selected>Monday</option>
+            <option value="2">Tuesday</option>
+            <option value="3">Wednesday</option>
+            <option value="4">Thursday</option>
+            <option value="5">Friday</option>
+            <option value="6">Saturday</option>
+          </select>
+        </div>
+
+        <!-- Catch-up missed -->
+        <div class="form-group sched-toggle-row">
+          <label class="toggle-label" for="schedCatchUp">
+            <input type="checkbox" id="schedCatchUp" checked>
+            <span>Run immediately if a scheduled run was missed</span>
+          </label>
+        </div>
+
+        <!-- Enabled -->
+        <div class="form-group sched-toggle-row">
+          <label class="toggle-label" for="schedEnabled">
+            <input type="checkbox" id="schedEnabled" checked>
+            <span>Enabled</span>
+          </label>
+        </div>
+      </div>
+      <div class="modal-footer">
+        <button class="btn btn-ghost" id="btnCancelSchedule">Cancel</button>
+        <button class="btn btn-primary" id="btnSaveSchedule">Save Schedule</button>
       </div>
     </div>
   </div>

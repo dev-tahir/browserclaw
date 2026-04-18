@@ -295,6 +295,7 @@
     setupEventListeners();
     await loadSettings();
     await loadSkills();
+    await loadSchedules();
     await loadAgents();
     connectDashboardPort();
   }
@@ -427,6 +428,13 @@
     // Save as skill (task detail header) — opens JSON script skill modal with conversation context
     $('#btnSaveAsSkill').addEventListener('click', () => openCreateScriptSkillModal(currentTaskId));
 
+    // Schedule modal
+    $('#btnAddSchedule').addEventListener('click', () => openScheduleModal(null));
+    $('#btnCloseSchedule').addEventListener('click', closeScheduleModal);
+    $('#btnCancelSchedule').addEventListener('click', closeScheduleModal);
+    $('#btnSaveSchedule').addEventListener('click', saveSchedule);
+    $('#schedRepeat').addEventListener('change', updateScheduleRepeatUI);
+
     // Close modals on overlay click — newTaskModal excluded (X button / Cancel only)
     settingsModal.addEventListener('click', (e) => {
       if (e.target === settingsModal) settingsModal.classList.remove('active');
@@ -435,6 +443,10 @@
       if (e.target === $('#skillModal')) closeSkillModal();
     });
     // Create Skill modal intentionally does NOT close on outside click
+
+    $('#scheduleModal').addEventListener('click', (e) => {
+      if (e.target === $('#scheduleModal')) closeScheduleModal();
+    });
   }
 
   // ============ DASHBOARD PORT (Real-time updates) ============
@@ -2405,5 +2417,257 @@ Generate ONLY the JSON. Extract tool calls, selectors, and patterns from the con
 
   // ── Update loadSkills to include script skills ────────────────────────────
   // (Already integrated into loadSkills/renderSkillsRow above)
+
+  // ═══════════════════════════════════════════════════════════════════════════
+  //  SCHEDULED TASKS
+  // ═══════════════════════════════════════════════════════════════════════════
+
+  let schedules = [];
+  let editingScheduleId = null;
+
+  const schedPicker = new ModelPickerController({
+    providerTabs: '#schProviderTabs',
+    modelSelect: '#schModelSelect',
+    orPicker: '#schOrModelPicker',
+    orTrigger: '#schOrModelTrigger',
+    orLabel: '#schOrModelLabel',
+    orDropdown: '#schOrModelDropdown',
+    orSearch: '#schOrModelSearch',
+    orList: '#schOrModelList',
+    reasoningSelector: '#schReasoningSelector',
+    defaultReasoning: 'low',
+  });
+
+  async function loadSchedules() {
+    const res = await chrome.runtime.sendMessage({ type: 'getSchedules' });
+    schedules = res?.schedules || [];
+    renderScheduledRow();
+  }
+
+  function renderScheduledRow() {
+    const container = $('#scheduledContainer');
+    container.innerHTML = '';
+
+    if (schedules.length === 0) {
+      container.innerHTML = '<div class="skills-empty">No scheduled tasks yet.</div>';
+      return;
+    }
+
+    for (const sched of schedules) {
+      const card = document.createElement('div');
+      card.className = `sched-card${sched.enabled ? '' : ' disabled'}`;
+
+      const info = document.createElement('div');
+      info.className = 'sched-card-info';
+
+      const repeatLabel = {
+        once: 'Once', hourly: 'Hourly', daily: 'Daily',
+        weekdays: 'Weekdays', weekly: 'Weekly', custom: 'Custom',
+      }[sched.repeat] || sched.repeat;
+
+      const timeStr = sched.time || '';
+      const nextStr = sched.nextRun ? formatRelativeTime(sched.nextRun) : '—';
+
+      info.innerHTML = `
+        <div class="sched-card-name">${escapeHtml(sched.name)}</div>
+        <div class="sched-card-meta">
+          <span class="sched-chip repeat">${repeatLabel}</span>
+          ${timeStr ? `<span class="sched-chip time">${timeStr}</span>` : ''}
+          <span class="sched-chip next">Next: ${escapeHtml(nextStr)}</span>
+          ${!sched.enabled ? '<span class="sched-chip missed">paused</span>' : ''}
+        </div>
+      `;
+
+      const actions = document.createElement('div');
+      actions.className = 'sched-card-actions';
+
+      const runBtn = document.createElement('button');
+      runBtn.className = 'skill-card-btn run';
+      runBtn.textContent = 'Run Now';
+      runBtn.addEventListener('click', async () => {
+        runBtn.disabled = true;
+        runBtn.textContent = 'Running…';
+        await chrome.runtime.sendMessage({ type: 'runScheduleNow', id: sched.id });
+        await loadSchedules();
+        await loadAgents();
+        runBtn.disabled = false;
+        runBtn.textContent = 'Run Now';
+      });
+      actions.appendChild(runBtn);
+
+      const editBtn = document.createElement('button');
+      editBtn.className = 'skill-card-btn';
+      editBtn.textContent = 'Edit';
+      editBtn.addEventListener('click', () => openScheduleModal(sched.id));
+      actions.appendChild(editBtn);
+
+      const delBtn = document.createElement('button');
+      delBtn.className = 'skill-card-btn delete';
+      delBtn.textContent = 'Delete';
+      delBtn.addEventListener('click', async () => {
+        if (confirm(`Delete schedule "${sched.name}"?`)) {
+          await chrome.runtime.sendMessage({ type: 'deleteSchedule', id: sched.id });
+          await loadSchedules();
+        }
+      });
+      actions.appendChild(delBtn);
+
+      card.appendChild(info);
+      card.appendChild(actions);
+      container.appendChild(card);
+    }
+  }
+
+  function formatRelativeTime(ts) {
+    const diff = ts - Date.now();
+    if (diff < 0) return 'overdue';
+    if (diff < 60000) return 'in <1m';
+    if (diff < 3600000) return `in ${Math.round(diff / 60000)}m`;
+    if (diff < 86400000) return `in ${Math.round(diff / 3600000)}h`;
+    return `in ${Math.round(diff / 86400000)}d`;
+  }
+
+  async function openScheduleModal(scheduleId) {
+    editingScheduleId = scheduleId || null;
+    const sched = scheduleId ? schedules.find(s => s.id === scheduleId) : null;
+
+    $('#scheduleModalTitle').textContent = sched ? 'Edit Schedule' : 'New Schedule';
+    $('#schedName').value = sched?.name || '';
+    $('#schedRepeat').value = sched?.repeat || 'daily';
+    $('#schedTime').value = sched?.time || '09:00';
+    $('#schedDay').value = sched?.day || '1';
+    $('#schedCatchUp').checked = sched?.catchUp !== false;
+    $('#schedEnabled').checked = sched?.enabled !== false;
+
+    if (sched?.repeat === 'custom') {
+      $('#schedCustomValue').value = sched.customValue || 2;
+      $('#schedCustomUnit').value = sched.customUnit || 'hours';
+    }
+
+    // Populate skill dropdown
+    await populateScheduleSkillSelect(sched?.skillId, sched?.skillType);
+
+    // Load models
+    await schedPicker.loadModels();
+    if (sched) {
+      schedPicker.setProvider(sched.provider || 'ollama');
+      // Try to pre-select model after a short delay for list to render
+      setTimeout(() => {
+        try {
+          const sel = $('#schModelSelect');
+          if (sel && sched.model) sel.value = sched.model;
+        } catch {}
+      }, 200);
+    }
+
+    updateScheduleRepeatUI();
+    $('#scheduleModal').classList.add('active');
+  }
+
+  async function populateScheduleSkillSelect(selectedSkillId, selectedType) {
+    const sel = $('#schedSkillSelect');
+    sel.innerHTML = '<option value="">— Select a skill —</option>';
+
+    // Script skills
+    for (const ss of scriptSkills) {
+      const opt = document.createElement('option');
+      opt.value = `script:${ss._id}`;
+      opt.textContent = `[Script] ${ss.name || ss._id}`;
+      if (selectedType === 'script' && ss._id === selectedSkillId) opt.selected = true;
+      sel.appendChild(opt);
+    }
+
+    // Text skills
+    for (const sk of skills) {
+      const opt = document.createElement('option');
+      opt.value = `text:${sk.id}`;
+      opt.textContent = `[Skill] ${sk.name}`;
+      if (selectedType === 'text' && sk.id === selectedSkillId) opt.selected = true;
+      sel.appendChild(opt);
+    }
+
+    // Render skill inputs if script skill selected
+    sel.addEventListener('change', () => renderScheduleSkillInputs());
+    renderScheduleSkillInputs();
+  }
+
+  function renderScheduleSkillInputs() {
+    const val = $('#schedSkillSelect').value;
+    const div = $('#schedSkillInputs');
+    div.innerHTML = '';
+
+    if (!val || !val.startsWith('script:')) return;
+
+    const skillId = val.replace('script:', '');
+    const ss = scriptSkills.find(s => s._id === skillId);
+    if (!ss || !ss.inputs || ss.inputs.length === 0) return;
+
+    for (const inp of ss.inputs) {
+      const fg = document.createElement('div');
+      fg.className = 'form-group';
+      fg.innerHTML = `
+        <label>${inp.label || inp.id}${inp.required ? ' <span style="color:var(--danger)">*</span>' : ''}</label>
+        <input type="${inp.type === 'number' ? 'number' : 'text'}" class="form-input sched-skill-input" data-id="${inp.id}" placeholder="${inp.placeholder || ''}" ${inp.defaultValue ? `value="${inp.defaultValue}"` : ''}>
+      `;
+      div.appendChild(fg);
+    }
+  }
+
+  function updateScheduleRepeatUI() {
+    const repeat = $('#schedRepeat').value;
+    $('#schedCustomInterval').style.display = repeat === 'custom' ? '' : 'none';
+    $('#schedTimeGroup').style.display = ['daily', 'weekdays', 'weekly', 'once'].includes(repeat) ? '' : 'none';
+    $('#schedDayGroup').style.display = repeat === 'weekly' ? '' : 'none';
+  }
+
+  function closeScheduleModal() {
+    $('#scheduleModal').classList.remove('active');
+    editingScheduleId = null;
+  }
+
+  async function saveSchedule() {
+    const name = $('#schedName').value.trim();
+    if (!name) { alert('Enter a schedule name.'); return; }
+
+    const skillVal = $('#schedSkillSelect').value;
+    if (!skillVal) { alert('Select a skill.'); return; }
+
+    const model = schedPicker.getModel();
+    if (!model) { alert('Select a model.'); return; }
+
+    const [skillType, skillId] = skillVal.split(':');
+
+    // Collect skill inputs
+    const inputValues = {};
+    document.querySelectorAll('.sched-skill-input').forEach(el => {
+      inputValues[el.dataset.id] = el.value;
+    });
+
+    const schedule = {
+      id: editingScheduleId || undefined,
+      name,
+      skillType,
+      skillId,
+      inputValues,
+      provider: schedPicker.getProvider(),
+      model,
+      reasoningEffort: schedPicker.getReasoning(),
+      repeat: $('#schedRepeat').value,
+      time: $('#schedTime').value,
+      day: $('#schedDay').value,
+      customValue: parseInt($('#schedCustomValue').value) || 2,
+      customUnit: $('#schedCustomUnit').value,
+      catchUp: $('#schedCatchUp').checked,
+      enabled: $('#schedEnabled').checked,
+    };
+
+    const res = await chrome.runtime.sendMessage({ type: 'saveSchedule', schedule });
+    if (res?.success) {
+      closeScheduleModal();
+      await loadSchedules();
+    } else {
+      alert('Failed to save: ' + (res?.error || 'Unknown'));
+    }
+  }
 
 })();
