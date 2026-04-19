@@ -6,6 +6,94 @@
   if (window.__browserControlAgentInjected) return;
   window.__browserControlAgentInjected = true;
 
+  // ============ VIRTUAL CURSOR ============
+
+  let _cursor = null;
+  let _cursorHideTimer = null;
+
+  function _getCursor() {
+    if (_cursor) return _cursor;
+
+    const el = document.createElement('div');
+    el.id = '__bca_cursor__';
+    el.innerHTML = `
+      <svg width="24" height="28" viewBox="0 0 24 28" fill="none" xmlns="http://www.w3.org/2000/svg" style="filter:drop-shadow(0 2px 6px rgba(0,0,0,0.7))">
+        <path d="M2 2L2 22L7.5 16.5L11 24L14 22.5L10.5 15H18L2 2Z" fill="#111" stroke="white" stroke-width="1.2" stroke-linejoin="round"/>
+        <path d="M4 5L4 17L8 12.5L11 19L12.5 18.3L9.5 12H15L4 5Z" fill="url(#gloss)" opacity="0.45"/>
+        <defs>
+          <linearGradient id="gloss" x1="4" y1="5" x2="15" y2="20" gradientUnits="userSpaceOnUse">
+            <stop offset="0%" stop-color="white"/>
+            <stop offset="100%" stop-color="transparent"/>
+          </linearGradient>
+        </defs>
+      </svg>
+      <div class="__bca_ripple__"></div>
+    `;
+
+    const style = document.createElement('style');
+    style.textContent = `
+      #__bca_cursor__ {
+        position: fixed;
+        top: 0; left: 0;
+        pointer-events: none;
+        z-index: 2147483647;
+        transform: translate(-2px, -2px);
+        transition: transform 80ms cubic-bezier(.25,.46,.45,.94);
+        will-change: transform;
+        opacity: 1;
+      }
+      #__bca_cursor__ svg { display: block; }
+      #__bca_cursor__ .__bca_ripple__ {
+        position: absolute;
+        top: 4px; left: 4px;
+        width: 16px; height: 16px;
+        border-radius: 50%;
+        background: rgba(80,160,255,0.55);
+        transform: scale(0);
+        opacity: 0;
+        pointer-events: none;
+      }
+      @keyframes __bca_ripple_anim__ {
+        0%   { transform: scale(0);   opacity: 0.8; }
+        60%  { transform: scale(3.5); opacity: 0.35; }
+        100% { transform: scale(5);   opacity: 0; }
+      }
+      @keyframes __bca_click_pulse__ {
+        0%   { filter: drop-shadow(0 2px 6px rgba(0,0,0,0.7)) brightness(1); }
+        30%  { filter: drop-shadow(0 0 12px rgba(80,160,255,0.9)) brightness(1.6); }
+        100% { filter: drop-shadow(0 2px 6px rgba(0,0,0,0.7)) brightness(1); }
+      }
+    `;
+
+    document.documentElement.appendChild(style);
+    document.documentElement.appendChild(el);
+    _cursor = el;
+    return _cursor;
+  }
+
+  function _moveCursor(x, y) {
+    const c = _getCursor();
+    c.style.transform = `translate(${x - 2}px, ${y - 2}px)`;
+    c.style.opacity = '1';
+    clearTimeout(_cursorHideTimer);
+    _cursorHideTimer = setTimeout(() => { c.style.opacity = '0'; }, 4000);
+  }
+
+  function _animateClick(x, y) {
+    _moveCursor(x, y);
+    const c = _getCursor();
+    const svg = c.querySelector('svg');
+    const ripple = c.querySelector('.__bca_ripple__');
+    // Pulse the arrow
+    svg.style.animation = 'none';
+    svg.offsetHeight; // reflow
+    svg.style.animation = '__bca_click_pulse__ 300ms ease forwards';
+    // Ripple ring
+    ripple.style.animation = 'none';
+    ripple.offsetHeight;
+    ripple.style.animation = '__bca_ripple_anim__ 450ms ease-out forwards';
+  }
+
   // ============ MESSAGE HANDLER ============
 
   chrome.runtime.onMessage.addListener((message, sender, sendResponse) => {
@@ -19,6 +107,12 @@
     switch (message.action) {
       case 'ping':
         return { success: true, pong: true };
+      case 'cursor_move':
+        _moveCursor(message.x, message.y);
+        return { success: true };
+      case 'cursor_click':
+        _animateClick(message.x, message.y);
+        return { success: true };
       case 'click':
         return doClick(message.selector);
       case 'type_text':

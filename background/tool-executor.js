@@ -106,6 +106,12 @@ export class ToolExecutor {
           return await this.executeTerminal(args.command, args.timeout || 30);
         case 'hover':
           return await this.hover(tabId, args.selector);
+        case 'double_click':
+          return await this.doubleClick(tabId, args.selector, args.x, args.y);
+        case 'right_click':
+          return await this.rightClick(tabId, args.selector, args.x, args.y);
+        case 'drag':
+          return await this.drag(tabId, args.from_selector, args.to_selector, args.from_x, args.from_y, args.to_x, args.to_y, args.steps);
         case 'go_back':
           return await this.goBack(tabId);
         case 'go_forward':
@@ -190,13 +196,23 @@ export class ToolExecutor {
 
   // ============ DOM INTERACTION (TRUSTED via chrome.debugger) ============
 
+  // Broadcast cursor position to the content script (fire-and-forget)
+  _cursorMove(tabId, x, y) {
+    chrome.tabs.sendMessage(tabId, { action: 'cursor_move', x, y }).catch(() => {});
+  }
+  _cursorClick(tabId, x, y) {
+    chrome.tabs.sendMessage(tabId, { action: 'cursor_click', x, y }).catch(() => {});
+  }
+
   async click(tabId, selector) {
     // Get element coordinates from content script
     const coords = await this._sendToContent(tabId, { action: 'get_element_coords', selector });
     if (!coords.success) return coords;
 
+    this._cursorMove(tabId, coords.x, coords.y);
     // Perform trusted click via CDP
     await this.debugger.click(tabId, coords.x, coords.y);
+    this._cursorClick(tabId, coords.x, coords.y);
 
     return {
       success: true,
@@ -266,6 +282,7 @@ export class ToolExecutor {
     const coords = await this._sendToContent(tabId, { action: 'get_element_coords', selector });
     if (!coords.success) return coords;
 
+    this._cursorMove(tabId, coords.x, coords.y);
     // Move mouse to element (triggers hover/mouseenter)
     await this.debugger.attach(tabId);
     await this.debugger._sendCommand(tabId, 'Input.dispatchMouseEvent', {
@@ -276,6 +293,60 @@ export class ToolExecutor {
     });
 
     return { success: true, message: `Hovered (trusted) over: ${selector} at (${coords.x}, ${coords.y})` };
+  }
+
+  async doubleClick(tabId, selector, x, y) {
+    let cx = x, cy = y;
+    if (selector) {
+      const coords = await this._sendToContent(tabId, { action: 'get_element_coords', selector });
+      if (!coords.success) return coords;
+      cx = coords.x; cy = coords.y;
+    }
+    if (cx == null || cy == null) return { success: false, error: 'Provide selector or x/y coordinates' };
+    this._cursorMove(tabId, cx, cy);
+    await this.debugger.doubleClick(tabId, cx, cy);
+    this._cursorClick(tabId, cx, cy);
+    return { success: true, message: `Double-clicked at (${cx}, ${cy})${selector ? ' on ' + selector : ''}` };
+  }
+
+  async rightClick(tabId, selector, x, y) {
+    let cx = x, cy = y;
+    if (selector) {
+      const coords = await this._sendToContent(tabId, { action: 'get_element_coords', selector });
+      if (!coords.success) return coords;
+      cx = coords.x; cy = coords.y;
+    }
+    if (cx == null || cy == null) return { success: false, error: 'Provide selector or x/y coordinates' };
+    this._cursorMove(tabId, cx, cy);
+    await this.debugger.rightClick(tabId, cx, cy);
+    return { success: true, message: `Right-clicked at (${cx}, ${cy})${selector ? ' on ' + selector : ''}` };
+  }
+
+  async drag(tabId, fromSelector, toSelector, fromX, fromY, toX, toY, steps) {
+    let fx = fromX, fy = fromY, tx = toX, ty = toY;
+
+    if (fromSelector) {
+      const fc = await this._sendToContent(tabId, { action: 'get_element_coords', selector: fromSelector });
+      if (!fc.success) return fc;
+      fx = fc.x; fy = fc.y;
+    }
+    if (toSelector) {
+      const tc = await this._sendToContent(tabId, { action: 'get_element_coords', selector: toSelector });
+      if (!tc.success) return tc;
+      tx = tc.x; ty = tc.y;
+    }
+    if (fx == null || fy == null || tx == null || ty == null) {
+      return { success: false, error: 'Provide from_selector/to_selector or from_x/from_y/to_x/to_y' };
+    }
+
+    this._cursorMove(tabId, fx, fy);
+    await this.debugger.drag(tabId, fx, fy, tx, ty, steps || 20);
+    this._cursorMove(tabId, tx, ty);
+
+    return {
+      success: true,
+      message: `Dragged from (${fx}, ${fy}) to (${tx}, ${ty})`
+    };
   }
 
   async selectOption(tabId, selector, value) {
@@ -643,6 +714,9 @@ export class ToolExecutor {
     copy_image: 50,
     paste_image: 150,
     press_key: 50,
+    double_click: 150,
+    right_click: 150,
+    drag: 200,
     press_mapped_button: 100,
     select_option: 100,
     fill_form: 100,
@@ -657,7 +731,8 @@ export class ToolExecutor {
   static DIFF_TOOLS = new Set([
     'navigate', 'click', 'type_text', 'press_key', 'select_option',
     'fill_form', 'go_back', 'go_forward', 'hover', 'press_mapped_button',
-    'scroll', 'execute_javascript', 'paste_image'
+    'scroll', 'execute_javascript', 'paste_image',
+    'double_click', 'right_click', 'drag'
   ]);
 
   /**

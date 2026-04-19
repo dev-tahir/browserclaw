@@ -346,6 +346,58 @@ export const TOOLS = [
   {
     type: 'function',
     function: {
+      name: 'double_click',
+      description: 'Double-click on an element or at specific coordinates. Use this to enter text-edit mode in canvas editors (Canva, Figma), open files, or trigger double-click handlers.',
+      parameters: {
+        type: 'object',
+        properties: {
+          selector: { type: 'string', description: 'CSS selector of the element to double-click' },
+          x: { type: 'number', description: 'X coordinate to double-click (use instead of selector for canvas elements)' },
+          y: { type: 'number', description: 'Y coordinate to double-click (use instead of selector for canvas elements)' }
+        },
+        required: []
+      }
+    }
+  },
+  {
+    type: 'function',
+    function: {
+      name: 'right_click',
+      description: 'Right-click on an element or at coordinates to open its context menu.',
+      parameters: {
+        type: 'object',
+        properties: {
+          selector: { type: 'string', description: 'CSS selector of the element to right-click' },
+          x: { type: 'number', description: 'X coordinate to right-click' },
+          y: { type: 'number', description: 'Y coordinate to right-click' }
+        },
+        required: []
+      }
+    }
+  },
+  {
+    type: 'function',
+    function: {
+      name: 'drag',
+      description: 'Click-and-drag from one position to another. Essential for canvas editors (Canva, Figma) to move objects, resize handles, drag items from a sidebar onto the canvas, or draw. Provide CSS selectors for known DOM elements, or raw x/y coordinates for canvas positions (use a screenshot first to get coordinates).',
+      parameters: {
+        type: 'object',
+        properties: {
+          from_selector: { type: 'string', description: 'CSS selector of the element to drag from' },
+          to_selector: { type: 'string', description: 'CSS selector of the element to drag to' },
+          from_x: { type: 'number', description: 'Starting X coordinate (use when selector unavailable)' },
+          from_y: { type: 'number', description: 'Starting Y coordinate' },
+          to_x: { type: 'number', description: 'Ending X coordinate' },
+          to_y: { type: 'number', description: 'Ending Y coordinate' },
+          steps: { type: 'integer', description: 'Number of intermediate mouse-move steps (default 20, increase for smoother drag on sensitive editors)' }
+        },
+        required: []
+      }
+    }
+  },
+  {
+    type: 'function',
+    function: {
       name: 'copy_image',
       description: 'Copy an image to the OS clipboard. Provide either a CSS selector pointing to an <img> element on the page, or a direct image URL. Once copied, use paste_image to paste it into any element that accepts image input (chat boxes, canvas editors, upload zones, etc.).',
       parameters: {
@@ -426,7 +478,7 @@ Use this for common flows like: navigate → click → type → click, or search
                   items: {
                     type: 'object',
                     properties: {
-                      tool: { type: 'string', description: 'Tool name to call (navigate, click, type_text, press_key, wait, screenshot, extract_content, find_elements, find_clickable, scroll, hover, wait_for_element, get_page_info, map_buttons, press_mapped_button, select_option, fill_form, execute_javascript, new_tab, go_back, go_forward, copy_image, paste_image)' },
+                      tool: { type: 'string', description: 'Tool name to call (navigate, click, type_text, press_key, wait, screenshot, extract_content, find_elements, find_clickable, scroll, hover, wait_for_element, get_page_info, map_buttons, press_mapped_button, select_option, fill_form, execute_javascript, new_tab, go_back, go_forward, copy_image, paste_image, double_click, right_click, drag)' },
                       args: { type: 'object', description: 'Arguments for the tool (same as calling the tool directly)' },
                       verify: {
                         type: 'object',
@@ -489,7 +541,7 @@ export function getToolsForPermissions(permissions) {
   const terminalTools = ['execute_terminal'];
   const screenshotTools = ['screenshot'];
   const navigationTools = ['navigate', 'new_tab', 'close_tab', 'switch_tab', 'go_back', 'go_forward'];
-  const interactionTools = ['click', 'type_text', 'press_key', 'hover', 'select_option', 'fill_form', 'execute_javascript', 'press_mapped_button', 'copy_image', 'paste_image'];
+  const interactionTools = ['click', 'type_text', 'press_key', 'hover', 'select_option', 'fill_form', 'execute_javascript', 'press_mapped_button', 'copy_image', 'paste_image', 'double_click', 'right_click', 'drag'];
   // map_buttons requires both screenshots AND interaction
   const visualMapTools = ['map_buttons'];
 

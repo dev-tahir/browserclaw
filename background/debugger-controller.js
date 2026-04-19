@@ -112,6 +112,61 @@ export class DebuggerController {
     });
   }
 
+  /**
+   * Right-click at given coordinates (triggers contextmenu event).
+   */
+  async rightClick(tabId, x, y) {
+    await this._ensureAttached(tabId);
+
+    await this._sendCommand(tabId, 'Input.dispatchMouseEvent', {
+      type: 'mouseMoved', x, y, button: 'none'
+    });
+    await this._delay(30);
+    await this._sendCommand(tabId, 'Input.dispatchMouseEvent', {
+      type: 'mousePressed', x, y, button: 'right', clickCount: 1, buttons: 2
+    });
+    await this._sendCommand(tabId, 'Input.dispatchMouseEvent', {
+      type: 'mouseReleased', x, y, button: 'right', clickCount: 1, buttons: 0
+    });
+  }
+
+  /**
+   * Drag from (fromX, fromY) to (toX, toY) with smooth intermediate steps.
+   * Holds the left mouse button down throughout the move.
+   * @param {number} steps  Number of intermediate mouseMoved events (default 20)
+   */
+  async drag(tabId, fromX, fromY, toX, toY, steps = 20) {
+    await this._ensureAttached(tabId);
+
+    // Move to start without pressing
+    await this._sendCommand(tabId, 'Input.dispatchMouseEvent', {
+      type: 'mouseMoved', x: fromX, y: fromY, button: 'none'
+    });
+    await this._delay(40);
+
+    // Press and hold
+    await this._sendCommand(tabId, 'Input.dispatchMouseEvent', {
+      type: 'mousePressed', x: fromX, y: fromY, button: 'left', clickCount: 1, buttons: 1
+    });
+    await this._delay(30);
+
+    // Smooth move along path
+    for (let i = 1; i <= steps; i++) {
+      const t = i / steps;
+      const ix = Math.round(fromX + (toX - fromX) * t);
+      const iy = Math.round(fromY + (toY - fromY) * t);
+      await this._sendCommand(tabId, 'Input.dispatchMouseEvent', {
+        type: 'mouseMoved', x: ix, y: iy, button: 'left', buttons: 1
+      });
+      await this._delay(8);
+    }
+
+    // Release
+    await this._sendCommand(tabId, 'Input.dispatchMouseEvent', {
+      type: 'mouseReleased', x: toX, y: toY, button: 'left', clickCount: 1, buttons: 0
+    });
+  }
+
   // ============ KEYBOARD EVENTS (TRUSTED) ============
 
   /**
