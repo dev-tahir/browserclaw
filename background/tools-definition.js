@@ -346,6 +346,35 @@ export const TOOLS = [
   {
     type: 'function',
     function: {
+      name: 'copy_image',
+      description: 'Copy an image to the OS clipboard. Provide either a CSS selector pointing to an <img> element on the page, or a direct image URL. Once copied, use paste_image to paste it into any element that accepts image input (chat boxes, canvas editors, upload zones, etc.).',
+      parameters: {
+        type: 'object',
+        properties: {
+          selector: { type: 'string', description: 'CSS selector of an <img> element whose image should be copied' },
+          url: { type: 'string', description: 'Direct URL of the image to copy (used when no selector is given)' }
+        },
+        required: []
+      }
+    }
+  },
+  {
+    type: 'function',
+    function: {
+      name: 'paste_image',
+      description: 'Paste an image from the OS clipboard into a page element using a trusted Ctrl+V key event. Call copy_image first to load the image into the clipboard. Works on any element that accepts image paste: contenteditable divs, chat inputs, canvas editors (Canva, Figma), Google Docs, etc.',
+      parameters: {
+        type: 'object',
+        properties: {
+          selector: { type: 'string', description: 'CSS selector of the element to focus before pasting. Omit to paste into whatever is currently focused.' }
+        },
+        required: []
+      }
+    }
+  },
+  {
+    type: 'function',
+    function: {
       name: 'map_buttons',
       description: 'Visually number every interactive button/link/input in the current viewport. Injects red numbered badges (1–30) onto the page, takes a screenshot showing the overlay, then removes the badges. Returns the screenshot AND a numbered button list. Use press_mapped_button to click a specific number. Prefer this over click when selectors are unclear or the page is complex.',
       parameters: {
@@ -397,7 +426,7 @@ Use this for common flows like: navigate → click → type → click, or search
                   items: {
                     type: 'object',
                     properties: {
-                      tool: { type: 'string', description: 'Tool name to call (navigate, click, type_text, press_key, wait, screenshot, extract_content, find_elements, find_clickable, scroll, hover, wait_for_element, get_page_info, map_buttons, press_mapped_button, select_option, fill_form, execute_javascript, new_tab, go_back, go_forward)' },
+                      tool: { type: 'string', description: 'Tool name to call (navigate, click, type_text, press_key, wait, screenshot, extract_content, find_elements, find_clickable, scroll, hover, wait_for_element, get_page_info, map_buttons, press_mapped_button, select_option, fill_form, execute_javascript, new_tab, go_back, go_forward, copy_image, paste_image)' },
                       args: { type: 'object', description: 'Arguments for the tool (same as calling the tool directly)' },
                       verify: {
                         type: 'object',
@@ -460,7 +489,7 @@ export function getToolsForPermissions(permissions) {
   const terminalTools = ['execute_terminal'];
   const screenshotTools = ['screenshot'];
   const navigationTools = ['navigate', 'new_tab', 'close_tab', 'switch_tab', 'go_back', 'go_forward'];
-  const interactionTools = ['click', 'type_text', 'press_key', 'hover', 'select_option', 'fill_form', 'execute_javascript', 'press_mapped_button'];
+  const interactionTools = ['click', 'type_text', 'press_key', 'hover', 'select_option', 'fill_form', 'execute_javascript', 'press_mapped_button', 'copy_image', 'paste_image'];
   // map_buttons requires both screenshots AND interaction
   const visualMapTools = ['map_buttons'];
 

@@ -205,8 +205,7 @@ export class DebuggerController {
   /**
    * Select all text in the currently focused element (Ctrl+A / Cmd+A).
    */
-  async selectAll(tabId) {
-    await this._ensureAttached(tabId);
+  async selectAll(tabId) {    await this._ensureAttached(tabId);
     // Send Ctrl+A directly with correct key codes so Chrome recognises this as a
     // control combination and does NOT insert the character 'a'.
     const params = {
@@ -229,6 +228,25 @@ export class DebuggerController {
     await this.selectAll(tabId);
     await this._delay(50);
     await this.pressKey(tabId, 'Backspace');
+  }
+
+  /**
+   * Paste clipboard contents into the currently focused element (Ctrl+V).
+   * Requires the OS clipboard to already contain the content to paste.
+   */
+  async pasteFromClipboard(tabId) {
+    await this._ensureAttached(tabId);
+    const params = {
+      key: 'v',
+      code: 'KeyV',
+      windowsVirtualKeyCode: 86,
+      nativeVirtualKeyCode: 86,
+      modifiers: 2, // Ctrl
+      text: '',
+      unmodifiedText: ''
+    };
+    await this._sendCommand(tabId, 'Input.dispatchKeyEvent', { type: 'rawKeyDown', ...params });
+    await this._sendCommand(tabId, 'Input.dispatchKeyEvent', { type: 'keyUp',     ...params });
   }
 
   // ============ INTERNAL HELPERS ============

@@ -12,7 +12,8 @@
     "debugger",
     "notifications",
     "alarms",
-    "downloads"
+    "downloads",
+    "clipboardWrite"
   ],
   "host_permissions": [
     "<all_urls>"

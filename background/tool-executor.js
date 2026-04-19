@@ -57,6 +57,10 @@ export class ToolExecutor {
           return await this.click(tabId, args.selector);
         case 'type_text':
           return await this.typeText(tabId, args.selector, args.text, args.clearFirst !== false);
+        case 'copy_image':
+          return await this.copyImage(tabId, args.selector, args.url);
+        case 'paste_image':
+          return await this.pasteImage(tabId, args.selector);
         case 'press_key':
           return await this.pressKey(tabId, args.key, args.selector);
         case 'screenshot':
@@ -235,6 +239,27 @@ export class ToolExecutor {
 
     await this.debugger.pressKey(tabId, key);
     return { success: true, message: `Pressed key (trusted): ${key}` };
+  }
+
+  async copyImage(tabId, selector, url) {
+    if (!selector && !url) return { success: false, error: 'Provide selector or url' };
+    // Delegate to content script — navigator.clipboard.write() must run in a page context
+    return await this._sendToContent(tabId, { action: 'copy_image', selector, url });
+  }
+
+  async pasteImage(tabId, selector) {
+    // Focus the target element first if a selector is given
+    if (selector) {
+      const clickResult = await this.click(tabId, selector);
+      if (!clickResult.success) return clickResult;
+      await new Promise(r => setTimeout(r, 150));
+    }
+    // Dispatch trusted Ctrl+V via CDP — pastes whatever is in the OS clipboard
+    await this.debugger.pasteFromClipboard(tabId);
+    return {
+      success: true,
+      message: `Pasted image from clipboard into ${selector || 'focused element'}`
+    };
   }
 
   async hover(tabId, selector) {
@@ -615,6 +640,8 @@ export class ToolExecutor {
     navigate: 500,
     click: 100,
     type_text: 50,
+    copy_image: 50,
+    paste_image: 150,
     press_key: 50,
     press_mapped_button: 100,
     select_option: 100,
@@ -630,7 +657,7 @@ export class ToolExecutor {
   static DIFF_TOOLS = new Set([
     'navigate', 'click', 'type_text', 'press_key', 'select_option',
     'fill_form', 'go_back', 'go_forward', 'hover', 'press_mapped_button',
-    'scroll', 'execute_javascript'
+    'scroll', 'execute_javascript', 'paste_image'
   ]);
 
   /**

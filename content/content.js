@@ -23,6 +23,8 @@
         return doClick(message.selector);
       case 'type_text':
         return doTypeText(message.selector, message.text, message.clearFirst);
+      case 'copy_image':
+        return doCopyImage(message.selector, message.url);
       case 'press_key':
         return doPressKey(message.key, message.selector);
       case 'hover':
@@ -181,6 +183,68 @@
       success: true,
       message: `Typed "${text.substring(0, 50)}${text.length > 50 ? '...' : ''}" into ${selector}`
     };
+  }
+
+  // ============ COPY IMAGE TO CLIPBOARD ============
+
+  async function doCopyImage(selector, url) {
+    try {
+      let imageUrl = url;
+
+      // Resolve URL from a DOM element if no explicit URL given
+      if (!imageUrl && selector) {
+        const el = findElement(selector);
+        if (!el) return { success: false, error: `Element not found: ${selector}` };
+        imageUrl = el.src || el.currentSrc || el.href
+          || el.getAttribute('data-src') || el.getAttribute('data-original')
+          || el.style.backgroundImage?.match(/url\(["']?([^"')]+)/)?.[1];
+        if (!imageUrl) return { success: false, error: `No image URL found on element: ${selector}` };
+      }
+
+      if (!imageUrl) return { success: false, error: 'Provide a selector or url argument' };
+
+      // Fetch the image (cross-origin allowed via extension host_permissions)
+      const resp = await fetch(imageUrl);
+      if (!resp.ok) return { success: false, error: `Fetch failed: ${resp.status} ${resp.statusText}` };
+      const blob = await resp.blob();
+
+      // Convert to PNG via canvas if not already PNG/JPEG (ClipboardItem is picky)
+      let finalBlob = blob;
+      if (!['image/png', 'image/jpeg'].includes(blob.type)) {
+        finalBlob = await _blobToPng(blob);
+      }
+
+      await navigator.clipboard.write([
+        new ClipboardItem({ [finalBlob.type]: finalBlob })
+      ]);
+
+      return {
+        success: true,
+        message: `Copied image to clipboard (${finalBlob.type}, ${Math.round(finalBlob.size / 1024)}KB) from ${imageUrl.substring(0, 100)}`
+      };
+    } catch (err) {
+      return { success: false, error: `copy_image failed: ${err.message}` };
+    }
+  }
+
+  function _blobToPng(blob) {
+    return new Promise((resolve, reject) => {
+      const img = new Image();
+      const objUrl = URL.createObjectURL(blob);
+      img.onload = () => {
+        URL.revokeObjectURL(objUrl);
+        const canvas = document.createElement('canvas');
+        canvas.width = img.naturalWidth;
+        canvas.height = img.naturalHeight;
+        canvas.getContext('2d').drawImage(img, 0, 0);
+        canvas.toBlob(pngBlob => {
+          if (pngBlob) resolve(pngBlob);
+          else reject(new Error('Canvas toBlob returned null'));
+        }, 'image/png');
+      };
+      img.onerror = () => { URL.revokeObjectURL(objUrl); reject(new Error('Image load failed')); };
+      img.src = objUrl;
+    });
   }
 
   // ============ PRESS KEY ============
