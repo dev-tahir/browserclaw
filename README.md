@@ -1,8 +1,12 @@
-# AI Browser Control Agent
+# BrowserClaw: Browser Automation for Local LLM (future)
 
 > Enterprise-grade AI-powered browser automation with skills, scheduling, and multi-agent orchestration.
 
-**Important:** This project is **not** affiliated with OpenClaw.com. It is a standalone, feature-rich automation platform.
+**Important:** this is project is not for openclaw. and is also not affliated with openclaw.com .
+
+this is stand alone automation for future local llm in browser. meanign simple step for clean automation without big heasle. gemma4 or current local llm doesnt peform very well. i have used minimax 2.5  2.7 but it still sufferes in some tasks claude haiku 4.5 performs better but it burns token like crazy. 
+
+openclaw is the  best name i could thought of and easy PR like you are reading this 😛. if you gave star it will make my day.
 
 A Chrome extension (Manifest V3) that brings **intelligent browser automation** to life. Supports **Ollama** (local LLMs) and **OpenRouter** (cloud APIs) with advanced features:
 - **Deterministic skill scripts** — JSON-based automation that runs reliably without AI per-step
@@ -171,7 +175,7 @@ To enable `execute_terminal` for shell commands:
 
 ```
 ┌─────────────────────────────────────────────────────────────────┐
-│                      Dashboard (UI)                              │
+│                      Dashboard (UI)                             │
 │  - Task grid/detail view                                        │
 │  - Chat interface                                               │
 │  - Skill editor                                                 │
@@ -301,143 +305,54 @@ const response = await fetch('http://localhost:11434/api/chat', {
 ## Skill Script Example
 
 See [how-skill-works.md](how-skill-works.md) for full specification.
-
-A quick example skill to search Google and extract headlines:
-
-```json
-{
-  "name": "Google Search Headlines",
-  "description": "Search Google for a topic and extract top headlines",
-  "version": 1,
-  "inputs": [
-    { "id": "topic", "label": "Search Topic", "type": "text", "default": "AI news" }
-  ],
-  "steps": [
-    { "id": "s1", "type": "action", "tool": "navigate", "args": { "url": "https://www.google.com" }, "label": "Open Google" },
-    { "id": "s2", "type": "action", "tool": "type_text", "args": { "selector": "textarea[name=q]", "text": "{{input.topic}}" }, "label": "Type search query" },
-    { "id": "s3", "type": "action", "tool": "press_key", "args": { "key": "Enter" }, "label": "Search" },
-    { "id": "s4", "type": "action", "tool": "wait", "args": { "seconds": 2 }, "label": "Wait for results" },
-    { "id": "s5", "type": "ai", "prompt": "Extract the top 5 headlines about {{input.topic}}. Return only headlines, one per line.", "saveAs": "headlines", "label": "Extract headlines" },
-    { "id": "s6", "type": "action", "tool": "task_complete", "args": { "summary": "Found headlines:\n{{var.headlines}}" }, "label": "Done" }
-  ]
-}
+  service-worker.js        — Main orchestration hub
+  agent-manager.js         — Multi-agent lifecycle management
+  ai-provider.js           — Ollama & OpenRouter API with streaming
+  tool-executor.js         — Browser automation tool execution
+  tools-definition.js      — Tool schemas (OpenAI function calling format)
+content/
+  content.js               — DOM interaction & content extraction
+dashboard/
+  dashboard.html/css/js    — Full task management dashboard
+popup/
+  popup.html/js            — Quick-access popup
+native-host/
+  bridge.js                — Node.js native messaging host
+  bridge.bat               — Windows launcher
+  install.bat              — Registry installer
+  com.browser_control.agent.json — Native host manifest
+icons/
+  icon16/48/128.png        — Extension icons
 ```
 
----
+## Supported Tools
+
+| Tool | Description |
+|------|-------------|
+| `navigate` | Navigate to a URL |
+| `click` | Click elements by CSS selector |
+| `type_text` | Type into input fields |
+| `press_key` | Press keyboard keys |
+| `screenshot` | Capture page screenshot |
+| `extract_content` | Get page content as markdown |
+| `extract_all_text` | Get all visible text |
+| `find_elements` | Find elements by selector |
+| `find_clickable` | Discover interactive elements |
+| `scroll` | Scroll page up/down/top/bottom |
+| `wait` | Timed delay (up to 5 min) |
+| `wait_for_element` | Wait for element to appear |
+| `fill_form` | Fill multiple form fields |
+| `select_option` | Select dropdown option |
+| `hover` | Hover over element |
+| `new_tab` / `close_tab` / `switch_tab` / `list_tabs` | Tab management |
+| `go_back` / `go_forward` | Browser history navigation |
+| `execute_javascript` | Run JS in page context |
+| `execute_terminal` | Run shell commands (needs permission) |
+| `get_page_info` | Get URL, title, dimensions |
+| `task_complete` / `task_failed` | Mark task status |
 
 ## Requirements
 
-- **Chrome 110+** — Manifest V3 support
-- **Ollama** (local) or **OpenRouter API key** (cloud)
-- **Node.js** (optional, for terminal bridge)
-
----
-
-## Advanced Features
-
-### Batch Execution (execute_steps)
-
-Use `execute_steps` to bundle multiple tools into a single AI call. Faster than tool-by-tool execution:
-
-```json
-{
-  "plan": [
-    {
-      "section": "Navigate and Search",
-      "steps": [
-        { "tool": "navigate", "args": { "url": "https://example.com" } },
-        { "tool": "wait_for_element", "args": { "selector": ".search-box", "timeout": 5 } },
-        { "tool": "click", "args": { "selector": ".search-box" } },
-        { "tool": "type_text", "args": { "text": "my query" } },
-        { "tool": "press_key", "args": { "key": "Enter" } }
-      ]
-    },
-    {
-      "section": "Capture Results",
-      "steps": [
-        { "tool": "wait", "args": { "seconds": 2 } },
-        { "tool": "screenshot" }
-      ]
-    }
-  ]
-}
-```
-
-### Reasoning Effort
-
-Models like Claude support different reasoning levels:
-- **low** — Fast, suitable for simple tasks
-- **medium** — Balanced speed and accuracy
-- **high** — Thorough analysis (slower, more tokens)
-
-Selected when creating a task or running a skill.
-
----
-
-## Troubleshooting
-
-### Extension not loading
-- Ensure you're using Chrome 110+
-- Check console for manifest errors (Settings → Extensions → Details)
-
-### Ollama not responding
-- Verify Ollama is running: `ollama serve`
-- Check base URL is `http://localhost:11434` (or your custom URL)
-- Ensure CORS is enabled if running on different machine
-
-### Skills not running
-- Check skill JSON is valid (use skill editor for validation)
-- Verify step IDs are unique and template syntax is correct
-- Check browser console for execution logs
-
-### Terminal commands not working
-- Ensure Node.js is installed and in PATH
-- Verify native host manifest has correct extension ID
-- Run `install.bat` as Administrator
-- Restart Chrome after installation
-
-### Screenshots not capturing
-- Enable EditableImage API: Settings → Extensions → This Extension → Allow EditableImage
-- Ensure extension has permission to run on the current site
-
----
-
-## Development
-
-### Project Structure
-- **background/** — Service worker, agents, executors
-- **content/** — Content script for DOM interaction
-- **dashboard/** — Main UI
-- **popup/** — Quick menu
-- **native-host/** — Terminal bridge
-
-### Running Tests
-```bash
-# Load unpacked in Chrome
-# Open dashboard, create test tasks
-```
-
-### Building a Distribution
-```bash
-# Zip the folder (exclude node_modules, .git)
-zip -r ai-browser-agent.zip . -x "node_modules/*" ".git/*"
-```
-
----
-
-## License
-
-MIT — Feel free to use and modify for personal or commercial projects.
-
----
-
-## Contributing
-
-Bug reports, feature requests, and PRs are welcome! Please ensure:
-- Code is modular and well-commented
-- New features include examples in `how-skill-works.md`
-- Backwards compatibility with existing skills
-
----
-
-**Built with ❤️ for intelligent browser automation.**
+- Chrome 110+ (Manifest V3 support)
+- Ollama running locally, OR an OpenRouter API key
+- Node.js (only for terminal bridge feature)
